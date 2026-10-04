@@ -5,7 +5,7 @@ from html import escape
 
 from ..pipeline.geometry import Arc, Circle, Drawing, Hatch, Line, Polyline, Text
 
-ORDER = ["HATCH", "LINES", "SYMBOLS", "STAIRS", "DIMENSIONS", "WINDOWS", "DOORS", "WALLS", "TEXT"]
+ORDER = ["HATCH", "LINES", "SYMBOLS", "STAIRS", "DIMENSIONS", "WINDOWS", "DOORS", "WALLS", "TEXT", "ROOMS"]
 
 
 def _f(v: float) -> str:
@@ -45,7 +45,8 @@ def render_svg(d: Drawing) -> str:
            "vector-effect:non-scaling-stroke;stroke-width:1;stroke-linecap:round;stroke-linejoin:round}"
            ".vec .l-WALLS path{stroke-width:1.8}.vec .l-DIMENSIONS path{stroke:#555;stroke-width:.8}"
            ".vec .l-HATCH path{stroke:#888;stroke-width:.6}.vec path.fill{fill:#9a9a9a;stroke:none;fill-rule:evenodd}"
-           ".vec text{font-family:Helvetica,Arial,sans-serif;fill:#111}</style>",
+           ".vec text{font-family:Helvetica,Arial,sans-serif;fill:#111}.vec .l-ROOMS text{font-weight:600}"
+           ".vec .l-WINDOWS path,.vec .l-DOORS path{stroke-width:.8}</style>",
            f'<rect width="{W}" height="{H}" fill="#fff"/>']
     if fills:
         out.append(f'<g class="l-HATCH"><path class="fill" d="{"".join(fills)}"/></g>')

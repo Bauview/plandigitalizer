@@ -23,11 +23,12 @@ MODEL_PATH = Path(__file__).resolve().parents[1] / "models" / "plannet.onnx"
 BG, WALL, WINDOW, DOOR = 0, 1, 2, 3
 
 TARGET_SIDE = 1600          # Netz-Arbeitsgrösse (lange Seite)
-MAX_NET_PIXELS = 5_000_000
+MAX_NET_PIXELS = 3_000_000
 TILE = 1536
 OVERLAP = 128
 
 _net = None
+TIMING = False
 
 
 def available() -> bool:
@@ -53,9 +54,13 @@ class Segmentation:
 
 def _forward(x: np.ndarray) -> np.ndarray:
     """x: float32 HxW (H, W Vielfache von 32) -> Wahrscheinlichkeiten 4 x H/2 x W/2."""
+    import time as _t
+    t0 = _t.time()
     net = _get_net()
     net.setInput(x[None, None])
     out = net.forward()[0]
+    if TIMING:
+        print(f"[PD-TIMING] forward {x.shape} {_t.time() - t0:.2f}s")
     out = out - out.max(0, keepdims=True)
     e = np.exp(out)
     return e / e.sum(0, keepdims=True)
@@ -98,6 +103,46 @@ def _confidence(p: np.ndarray) -> float:
     return float(p.max(0)[sel].mean())
 
 
+def _crop(gray: np.ndarray, size: float) -> np.ndarray:
+    """Quadratischer Ausschnitt (Kantenlänge ``size`` px) um den Schwerpunkt der Zeichnung."""
+    h, w = gray.shape
+    k = min(1.0, 400.0 / max(h, w))
+    small = cv2.resize(gray, None, fx=k, fy=k, interpolation=cv2.INTER_AREA)
+    ys, xs = np.nonzero(small < 128)
+    if len(xs) < 20:
+        cx, cy = w / 2, h / 2
+    else:
+        cx, cy = float(np.median(xs)) / k, float(np.median(ys)) / k
+    half = size / 2
+    x0 = int(max(0, min(w - size, cx - half))) if w > size else 0
+    y0 = int(max(0, min(h - size, cy - half))) if h > size else 0
+    return gray[y0:y0 + int(size), x0:x0 + int(size)]
+
+
+def _search_scale(gray: np.ndarray, s_max: float) -> float:
+    """Netzgrösse wählen: auf einem Ausschnitt (512 Netz-Pixel) mehrere Verkleinerungen testen,
+    die mit der höchsten mittleren Sicherheit gewinnt. Spart im Browser viel Rechenzeit."""
+    h, w = gray.shape
+    s0 = min(1.0, TARGET_SIDE / max(h, w))
+    conf = {}
+    side = 768
+    for k in (1.0, 0.7, 0.5, 0.35):
+        sc = s0 * k
+        conf[sc] = _confidence(_run(_crop(gray, side / sc), sc))
+    best = _pick(conf)
+    extra = best * 0.7 if best == min(conf) else (best * 1.4 if best == max(conf) else None)
+    if extra is not None and extra <= s_max and h * w * extra * extra > 32 * 32:
+        conf[extra] = _confidence(_run(_crop(gray, side / extra), extra))
+        best = _pick(conf)
+    return best
+
+
+def _pick(conf: dict) -> float:
+    """Höchste Sicherheit; bei praktisch gleicher Sicherheit die grössere Darstellung (mehr Detail)."""
+    top = max(conf.values())
+    return max(sc for sc, c in conf.items() if c >= top - 0.012)
+
+
 def segment(gray: np.ndarray, scale: float | None = None) -> Segmentation:
     """Erkennt Wände, Fenster und Türen.
 
@@ -109,22 +154,9 @@ def segment(gray: np.ndarray, scale: float | None = None) -> Segmentation:
     s_max = math.sqrt(MAX_NET_PIXELS / float(h * w))
     if scale is not None:
         s = min(scale, s_max)
-        p = _run(gray, s)
     else:
-        s0 = min(1.0, TARGET_SIDE / max(h, w))
-        cands = {}
-        for k in (1.0, 0.7, 0.5, 0.35):
-            cands[s0 * k] = _run(gray, s0 * k)
-        best = max(cands, key=lambda sc: _confidence(cands[sc]))
-        extra = None
-        if best == min(cands):
-            extra = best * 0.7
-        elif best == max(cands) and best * 1.4 <= s_max:
-            extra = best * 1.4
-        if extra is not None and 32 * 32 < h * w * extra * extra:
-            cands[extra] = _run(gray, extra)
-            best = max(cands, key=lambda sc: _confidence(cands[sc]))
-        s, p = best, cands[best]
+        s = _search_scale(gray, s_max)
+    p = _run(gray, s)
     probs = np.zeros((h, w, 4), np.uint8)
     for c in range(4):
         probs[:, :, c] = cv2.resize((p[c] * 255).astype(np.uint8), (w, h), interpolation=cv2.INTER_LINEAR)

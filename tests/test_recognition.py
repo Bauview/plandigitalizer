@@ -179,3 +179,23 @@ def test_wall_geometry_on_scan():
     widths = sorted(o.width * d.mm_per_px for o in sem.openings if o.kind == "door")
     assert len(widths) == 3 and all(abs(x - 900) < 55 for x in widths), widths   # Leibungslinie hat Strichbreite
     assert not math.isnan(sum(widths))
+
+
+def test_room_stamps_verified(tmp_path):
+    """Raumstempel: korrekte Fläche wird übernommen, falsche verworfen (mit Hinweis)."""
+    from PIL import Image, ImageDraw, ImageFont
+    from make_samples import FONT, P  # type: ignore
+    img = Image.open(SAMPLES / "scan_300dpi.png").convert("L")
+    d = ImageDraw.Draw(img)
+    f = ImageFont.truetype(FONT, 34)
+    d.text(P(6.0, 6.45), "20.3 m2", fill=0, font=f)      # Wohnen: 6.58 × 3.08 m = 20.3 m²
+    d.text(P(9.4, 2.95), "35.0 m2", fill=0, font=f)      # Küche/Bad: tatsächlich 27.6 m² -> falsch
+    p = tmp_path / "stempel.png"
+    img.save(p)
+    dr = run_pipeline(p)
+    from app.pipeline.geometry import Text
+    rooms = [e.text for e in dr.entities if isinstance(e, Text) and e.layer == "ROOMS"]
+    assert "20.3 m²" in rooms, rooms
+    assert "35.0 m²" not in rooms, rooms
+    assert any("35.0 m²" in w and "nicht übernommen" in w for w in dr.warnings), dr.warnings
+    assert "Wohnen" in rooms

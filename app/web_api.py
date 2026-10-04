@@ -59,7 +59,12 @@ def prepare(path: str) -> str:
     try:
         _state.clear()
         OUT.mkdir(parents=True, exist_ok=True)
+        import time as _t
+        from .pipeline import semantic as _sem
+        _sem.TIMING = True
+        _t0 = _t.time()
         st = stage_prepare(Path(path))
+        print(f"[PD-TIMING] prepare total {_t.time() - _t0:.1f}s")
         imgs, k = ocr_images(st.prep.gray)
         files = []
         for i, img in enumerate(imgs):
@@ -84,7 +89,10 @@ def finish(tsvs_json: str, ocr_ok: bool, calibration_json: str, settings_json: s
         calibration = json.loads(calibration_json) if calibration_json else None
         settings = json.loads(settings_json or "{}")
         essential_only = not (isinstance(settings, dict) and settings.get("detail") == "all")
+        import time as _t
+        _t0 = _t.time()
         drawing = stage_finish(st, texts, bool(ocr_ok), calibration, report, essential_only=essential_only)
+        print(f"[PD-TIMING] finish {_t.time() - _t0:.1f}s")
 
         report(3)
         stem = _safe_stem(name)

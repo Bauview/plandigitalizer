@@ -18,6 +18,7 @@ LAYERS: dict[str, tuple[int, int, str]] = {
     "WINDOWS": (4, 25, "Fenster"),
     "STAIRS": (5, 25, "Treppen"),
     "TEXT": (2, 18, "Texte"),
+    "ROOMS": (2, 18, "Raumstempel (Name, Fläche)"),
     "DIMENSIONS": (1, 13, "Bemassung"),
     "LINES": (8, 25, "Linien"),
     "HATCH": (9, 9, "Schraffuren / Füllungen"),
@@ -95,6 +96,7 @@ class Text:
     conf: float = 0.0
     layer: str = "TEXT"
     cap: float | None = None                  # bereinigte Versalhöhe (px)
+    group: int = -1                           # Raumstempel: Zeilen mit gleicher Gruppe gehören zusammen
 
     @property
     def height(self) -> float:

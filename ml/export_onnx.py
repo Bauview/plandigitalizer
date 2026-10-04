@@ -20,9 +20,10 @@ def main():
     m.load_state_dict(torch.load(ckpt, map_location="cpu")["model"])
     m.eval()
     out.parent.mkdir(parents=True, exist_ok=True)
-    torch.onnx.export(m, torch.zeros(1, 1, 256, 256), str(out), opset_version=13, input_names=["x"],
-                      output_names=["y"], dynamic_axes={"x": {2: "h", 3: "w"}, "y": {2: "h2", 3: "w2"}},
-                      dynamo=False, do_constant_folding=True)
+    # feste Exportgrösse: der OpenCV-Build in Pyodide kann dynamische Achsen nicht laden;
+    # zur Laufzeit passt OpenCV-DNN das voll-konvolutionale Netz an jede Eingabegrösse an
+    torch.onnx.export(m, torch.zeros(1, 1, 512, 512), str(out), opset_version=13, input_names=["x"],
+                      output_names=["y"], dynamo=False, do_constant_folding=True)
     import cv2
     net = cv2.dnn.readNetFromONNX(str(out))
     x = np.random.rand(1, 1, 320, 448).astype(np.float32)

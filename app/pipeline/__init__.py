@@ -9,7 +9,6 @@ from typing import Callable
 
 import cv2
 
-import numpy as np
 
 from . import cleanup, essential, semantic
 from .classify import classify
@@ -29,6 +28,8 @@ STAGES = [
 ]
 
 _ALPHA = __import__("re").compile(r"[A-Za-zÄÖÜäöüéèàç]{2,}")
+_TITLE = __import__("re").compile(r"grundriss|geschoss|\b(EG|OG|UG|DG|\d\.\s?OG)\b|bestand|wohnung", __import__("re").I)
+_SCALE_TXT = __import__("re").compile(r"\b(m|mst\.?|massstab)?\s*1\s*:\s*\d{2,4}\b", __import__("re").I)
 
 SCALE_UNKNOWN = "Massstab konnte nicht zuverlässig erkannt werden. Die Zeichnung muss in CAD skaliert werden."
 
@@ -179,6 +180,15 @@ def stage_finish(st: Stage1, texts: list, ocr_ok: bool, calibration: dict | None
         else:
             drawing.scale_note = drawing.scale_note or "Einheit = Bildpixel. Bitte in CAD skalieren."
 
+    stamps = None
+    if sem is not None and texts:
+        stamps = essential.room_stamps(sem, texts, drawing.mm_per_px)
+        if not drawing.mm_per_px and stamps[3]:
+            drawing.mm_per_px, drawing.unit = stamps[3], "mm"
+            drawing.scale_note = ("Massstab aus den Flächenangaben der Raumstempel abgeleitet – bitte in CAD "
+                                  "an einem bekannten Mass prüfen.")
+            warnings = [x for x in warnings if x != SCALE_UNKNOWN]
+            stamps = essential.room_stamps(sem, texts, drawing.mm_per_px)
     if not drawing.mm_per_px and sem is not None:
         est = essential.fallback_scale_from_doors(sem)
         if est:
@@ -210,7 +220,22 @@ def stage_finish(st: Stage1, texts: list, ocr_ok: bool, calibration: dict | None
             for a in vec.arcs:
                 if a.layer == "DOORS":
                     a.layer = "SYMBOLS"
+        used = set()
+        if stamps:
+            drawing.entities.extend(stamps[0])
+            used = {id(q) for q in stamps[1]}
+            warnings.extend(stamps[2])
+        plan_title = None
         for t in texts:
+            if id(t) in used:
+                continue
+            if essential_only and _TITLE.search(t.text) and not inside(t.center):
+                # Plantitel (z.B. "Grundriss EG 1:100") -> Plankopf, ohne alte Massstabsangabe
+                if plan_title is None:
+                    plan_title = _SCALE_TXT.sub("", t.text).strip(" ,-–")
+                continue
+            if essential_only and _SCALE_TXT.search(t.text):
+                continue
             if essential_only:
                 if t.layer == "DIMENSIONS" or not _ALPHA.search(t.text):
                     if not ("m2" in t.text or "m²" in t.text) or not inside(t.center):
@@ -221,6 +246,7 @@ def stage_finish(st: Stage1, texts: list, ocr_ok: bool, calibration: dict | None
         recog = {"walls": len(sem.rects), "doors": n_d, "windows": n_w, "wall_px": round(sem.wall_px, 1)}
     else:
         recog = None
+        plan_title = None
         for rings in vec.wall_regions:
             for ring in rings:
                 drawing.entities.append(Polyline(ring, True, "WALLS"))
@@ -250,6 +276,7 @@ def stage_finish(st: Stage1, texts: list, ocr_ok: bool, calibration: dict | None
         "scale_ratio_text": ratio,
         "ocr": ocr_ok,
         "recognition": recog,
+        "plan_title": plan_title,
         "model": st.seg is not None,
         "seconds": round(time.time() - t_start, 1),
     }

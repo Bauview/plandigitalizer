@@ -14,7 +14,9 @@ from dataclasses import dataclass, field
 import cv2
 import numpy as np
 
-from .geometry import Arc, Hatch, Line, Polyline
+import re
+
+from .geometry import Arc, Hatch, Line, Polyline, Text
 from .semantic import DOOR, WALL, WINDOW
 from .vectorize import _orthogonalize
 from .walls import decompose, footprint, median_thickness, merge_rects, raster_rects
@@ -73,7 +75,6 @@ def reconstruct(labels: np.ndarray, binary: np.ndarray) -> SemanticPlan | None:
     if n > 1:
         imax = 1 + int(np.argmax(st[1:, cv2.CC_STAT_AREA]))
         amax = float(st[imax, cv2.CC_STAT_AREA])
-        emax = float(max(st[imax, cv2.CC_STAT_WIDTH], st[imax, cv2.CC_STAT_HEIGHT]))
         for i in range(1, n):
             ext = max(st[i, cv2.CC_STAT_WIDTH], st[i, cv2.CC_STAT_HEIGHT])
             if keep[i] and st[i, cv2.CC_STAT_AREA] < 0.04 * amax and ext < 10 * t:
@@ -565,22 +566,30 @@ def _ring(c, eps):
 
 
 def opening_entities(sp: SemanticPlan, binary: np.ndarray) -> list:
-    """Genormte Symbole: Fenster (Leibungs- und Glaslinien), Türen (Blatt + Anschlagbogen)."""
+    """Fenster- und Türsymbole.
+
+    Fenster: Die im Plan gezeichneten Linien in der Öffnung (Rahmen, Glas, Leibung) und eine
+    aussen gezeichnete Fensterbank werden aus dem Bild gelesen und sauber nachgezogen. Ist nichts
+    erkennbar, wird ein Standardsymbol (Rahmen + Glas) gesetzt.
+    Türen: Türblatt (schmales Rechteck) + Anschlagbogen, Drehpunkt und Aufschlag aus dem
+    gezeichneten Bogen. Ohne erkennbaren Bogen bleibt die Öffnung ohne Symbol.
+    """
     t = sp.wall_px
     ents: list = []
     ink = (binary > 0).astype(np.uint8)
-    ink = cv2.bitwise_and(ink, cv2.bitwise_not(cv2.dilate(sp.walls, np.ones((3, 3), np.uint8))) // 255)
-    rad = max(1, int(round(0.12 * t)))
-    tol_ink = cv2.dilate(ink, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * rad + 1,) * 2))
+    tol_ink = _symbol_ink(ink, sp.walls, t)
+    outside = cv2.bitwise_not(footprint_mask(sp)) > 0
     for o in sp.openings:
         if o.kind == "window":
-            ents.extend(_window_lines(o))
+            ents.extend(_window_symbol(o, ink, outside, t))
         else:
             if not o.swing:
                 o.swing = _door_swing(o, tol_ink)
             for hx, hy, ldx, ldy, r, jdx, jdy in o.swing:
                 tip = (hx + ldx * r, hy + ldy * r)
-                ents.append(Line((hx, hy), tip, "DOORS"))
+                lt = max(1.5, 0.045 * r)                     # Türblatt ca. 4 cm
+                nx, ny = jdx * lt, jdy * lt                  # zur Öffnung hin
+                ents.append(Polyline([(hx, hy), tip, (tip[0] + nx, tip[1] + ny), (hx + nx, hy + ny)], True, "DOORS"))
                 a_leaf = math.degrees(math.atan2(ldy, ldx)) % 360
                 a_j = math.degrees(math.atan2(jdy, jdx)) % 360
                 if (a_j - a_leaf) % 360 <= 180:
@@ -590,19 +599,73 @@ def opening_entities(sp: SemanticPlan, binary: np.ndarray) -> list:
     return ents
 
 
-def _window_lines(o: Opening) -> list:
-    out = []
-    if o.orient == "h":
-        cm = (o.y0 + o.y1) / 2
-        g = max(1.0, 0.08 * (o.y1 - o.y0))
-        for y in (o.y0, o.y1, cm - g, cm + g):
-            out.append(Line((o.x0, y), (o.x1, y), "WINDOWS"))
-    else:
-        cm = (o.x0 + o.x1) / 2
-        g = max(1.0, 0.08 * (o.x1 - o.x0))
-        for x in (o.x0, o.x1, cm - g, cm + g):
-            out.append(Line((x, o.y0), (x, o.y1), "WINDOWS"))
+def _line_positions(prof: np.ndarray, thr: float = 0.6) -> list[float]:
+    """Mittellagen zusammenhängender Zeilen mit viel Tinte (= durchgehende Linien)."""
+    out, start = [], None
+    for i, v in enumerate(list(prof) + [0.0]):
+        if v >= thr and start is None:
+            start = i
+        elif v < thr and start is not None:
+            out.append((start + i - 1) / 2.0)
+            start = None
     return out
+
+
+def _window_symbol(o: Opening, ink: np.ndarray, outside: np.ndarray, t: float) -> list:
+    H, W = ink.shape
+    horiz = o.orient == "h"
+    a0, a1 = (o.x0, o.x1) if horiz else (o.y0, o.y1)
+    f0, f1 = (o.y0, o.y1) if horiz else (o.x0, o.x1)
+    T = max(1.0, f1 - f0)
+    span = a1 - a0
+
+    def P(a, f):
+        return (a, f) if horiz else (f, a)
+
+    # Querprofil über die Wandstärke (+ etwas aussen für die Fensterbank)
+    m = 0.7 * T
+    q0, q1 = int(math.floor(f0 - m)), int(math.ceil(f1 + m))
+    s0, s1 = int(a0 + 0.12 * span), int(a1 - 0.12 * span)
+    lines = []
+    if s1 - s0 >= 3:
+        if horiz:
+            sub = ink[max(0, q0):min(H, q1), s0:s1]
+        else:
+            sub = ink[s0:s1, max(0, q0):min(W, q1)].T
+        prof = sub.mean(axis=1) if sub.size else np.zeros(0)
+        lines = [max(0, q0) + p for p in _line_positions(prof)]
+    inside = [p for p in lines if f0 - 1.5 <= p <= f1 + 1.5]
+    outer = [p for p in lines if p < f0 - 1.5 or p > f1 + 1.5]
+
+    # Aussenseite bestimmen
+    def is_out(f):
+        x, y = P((a0 + a1) / 2, f)
+        xi, yi = int(round(x)), int(round(y))
+        return 0 <= xi < W and 0 <= yi < H and outside[yi, xi]
+    out_sign = -1 if is_out(f0 - 0.5 * T - 2) else (1 if is_out(f1 + 0.5 * T + 2) else 0)
+
+    ents = []
+    for a, b in ((P(a0, f0), P(a0, f1)), (P(a1, f0), P(a1, f1))):   # Leibungen (Fensteranschlag)
+        ents.append(Line(a, b, "WINDOWS"))
+    inner_lines = [min(max(p, f0), f1) for p in inside]
+    if len(inner_lines) >= 1:
+        for p in inner_lines:
+            ents.append(Line(P(a0, p), P(a1, p), "WINDOWS"))
+    else:
+        # Standard: Rahmen (ca. 8 cm) in Wandmitte + Glaslinie
+        fd = min(0.38 * T, max(2.0, 0.27 * T))
+        c = (f0 + f1) / 2
+        ents.append(Polyline([P(a0, c - fd / 2), P(a1, c - fd / 2), P(a1, c + fd / 2), P(a0, c + fd / 2)], True, "WINDOWS"))
+        ents.append(Line(P(a0, c), P(a1, c), "WINDOWS"))
+    # Fensterbank aussen: gezeichnet übernehmen, sonst nichts erfinden
+    if out_sign:
+        sills = [p for p in outer if (p - (f1 if out_sign > 0 else f0)) * out_sign > 0 and abs(p - (f1 if out_sign > 0 else f0)) < m]
+        if sills:
+            p = min(sills, key=lambda q: abs(q - (f1 if out_sign > 0 else f0)))
+            ov = max(1.5, 0.04 * span)
+            face = f1 if out_sign > 0 else f0
+            ents.append(Polyline([P(a0 - ov, face), P(a0 - ov, p), P(a1 + ov, p), P(a1 + ov, face)], False, "WINDOWS"))
+    return ents
 
 
 def _door_swing(o: Opening, ink) -> list:
@@ -671,3 +734,109 @@ def fallback_scale_from_doors(sp: SemanticPlan) -> float | None:
 
 def footprint_mask(sp: SemanticPlan) -> np.ndarray:
     return footprint(sp.band, int(max(3, 4 * sp.wall_px)))
+
+
+# =============================================================================== Raumstempel
+_AREA_RE = re.compile(r"(?:F\s*[=:]\s*)?(\d{1,3}(?:[.,]\d{1,2})?)\s*(?:m\s*[2²]|qm)", re.I)
+_LETTERS = re.compile(r"[A-Za-zÄÖÜäöüéèàç]{2,}")
+
+
+@dataclass
+class Room:
+    label: int
+    area_px: float
+    center: tuple
+    mask_bbox: tuple
+
+
+def rooms(sp: SemanticPlan) -> tuple[np.ndarray, list[Room]]:
+    """Räume = Freiflächen innerhalb des Gebäudes, begrenzt durch Wände und Öffnungen."""
+    t = sp.wall_px
+    foot = footprint_mask(sp)
+    free = cv2.bitwise_and(foot, cv2.bitwise_not(cv2.dilate(sp.band, np.ones((3, 3), np.uint8))))
+    n, lab, st, cen = cv2.connectedComponentsWithStats(free, connectivity=4)
+    out = []
+    for i in range(1, n):
+        if st[i, cv2.CC_STAT_AREA] < (4 * t) ** 2:
+            continue
+        out.append(Room(i, float(st[i, cv2.CC_STAT_AREA]), (float(cen[i][0]), float(cen[i][1])), tuple(st[i, :4])))
+    return lab, out
+
+
+def room_stamps(sp: SemanticPlan, texts: list, mm_per_px: float | None):
+    """Raumstempel aus der Texterkennung: Name(n) + Fläche je Raum.
+
+    Die Fläche wird nur übernommen, wenn sie zur gemessenen Raumfläche passt (±8 %).
+    Gibt (Text-Entities, verwendete Texte, Hinweise, Massstab aus Raumflächen oder None) zurück.
+    """
+    lab, rms = rooms(sp)
+    H, W = lab.shape
+    by_room: dict[int, list] = {}
+    for tx in texts:
+        cx, cy = tx.center
+        xi, yi = int(cx), int(cy)
+        if not (0 <= xi < W and 0 <= yi < H):
+            continue
+        r = int(lab[yi, xi])
+        if r and any(rm.label == r for rm in rms):
+            by_room.setdefault(r, []).append(tx)
+    # Massstab aus Raumflächen (nur wenn mehrere Räume übereinstimmen)
+    scale_from_rooms = None
+    ratios = []
+    for rm in rms:
+        for tx in by_room.get(rm.label, []):
+            m_ = _AREA_RE.search(tx.text.replace(" ", "")) or _AREA_RE.search(tx.text)
+            if m_:
+                a = float(m_.group(1).replace(",", "."))
+                if 1.0 <= a <= 500:
+                    ratios.append(math.sqrt(a * 1e6 / rm.area_px))
+    if len(ratios) >= 2:
+        r_ = np.array(ratios)
+        med = float(np.median(r_))
+        core = r_[np.abs(r_ - med) < 0.04 * med]
+        if len(core) >= 2 and len(core) >= 0.6 * len(r_):
+            scale_from_rooms = float(np.median(core))
+    mmpp = mm_per_px or scale_from_rooms
+    ents, used, notes = [], [], []
+    for rm in rms:
+        txs = sorted(by_room.get(rm.label, []), key=lambda q: q.box[1])
+        if not txs:
+            continue
+        names = [q for q in txs if _LETTERS.search(q.text) and not _AREA_RE.search(q.text)]
+        areas = [q for q in txs if _AREA_RE.search(q.text)]
+        if not names and not areas:
+            continue
+        lines = []
+        hs = [q.height for q in txs if q.height > 0]
+        th = float(np.median(hs)) if hs else 3 * sp.wall_px
+        for q in names:
+            lines.append((q.text.strip(), th))
+            used.append(q)
+        if areas:
+            q = areas[0]
+            a = float(_AREA_RE.search(q.text).group(1).replace(",", "."))
+            used.extend(areas)
+            if mmpp:
+                meas = rm.area_px * mmpp * mmpp / 1e6
+                if abs(a - meas) <= 0.08 * meas:
+                    lines.append((f"{a:.1f} m²", 0.8 * th))
+                else:
+                    notes.append(f"Raumstempel «{' '.join(n.text for n in names) or '?'}»: Fläche {a:.1f} m² "
+                                 f"weicht von der gemessenen Fläche {meas:.1f} m² ab – nicht übernommen.")
+            else:
+                lines.append((f"{a:.1f} m²", 0.8 * th))
+        if not lines:
+            continue
+        # Stempel zentriert an der Stelle des Originalstempels
+        x0 = min(q.box[0] for q in txs)
+        x1 = max(q.box[2] for q in txs)
+        y0 = min(q.box[1] for q in txs)
+        y1 = max(q.box[3] for q in txs)
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        total = sum(h_ * 1.5 for _, h_ in lines)
+        y = cy - total / 2
+        for text, h_ in lines:
+            w_ = 0.62 * h_ * len(text)
+            ents.append(Text(text, (cx - w_ / 2, y, cx + w_ / 2, y + h_), 0, 99.0, "ROOMS", cap=h_, group=rm.label))
+            y += 1.5 * h_
+    return ents, used, notes, scale_from_rooms

@@ -184,7 +184,7 @@ def derive_model(d: Drawing, s: Settings3D) -> BuildingModel:
     n, lab, stats, _ = cv2.connectedComponentsWithStats(free, connectivity=4)
     names_by_label: dict[int, list[str]] = {}
     for t in texts:
-        if t.layer != "TEXT" or not re.search(r"[A-Za-zÄÖÜäöü]", t.text) or _DIM_RE.match(t.text):
+        if t.layer not in ("TEXT", "ROOMS") or not re.search(r"[A-Za-zÄÖÜäöü]", t.text) or _DIM_RE.match(t.text):
             continue
         cx, cy = t.center
         if 0 <= int(cy) < H and 0 <= int(cx) < W and lab[int(cy), int(cx)] > 0:

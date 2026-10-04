@@ -32,7 +32,7 @@ LOW_QUALITY_MSG = ("Die Planqualität ist möglicherweise zu gering. Für besser
                    "empfehlen wir einen Scan mit mindestens 300 dpi.")
 
 
-def prepare(bgr: np.ndarray, try_perspective: bool = True) -> Prepared:
+def prepare(bgr: np.ndarray, try_perspective: bool = True, deskew: bool = True) -> Prepared:
     warnings: list[str] = []
     h, w = bgr.shape[:2]
     if min(h, w) < 300:
@@ -66,7 +66,10 @@ def prepare(bgr: np.ndarray, try_perspective: bool = True) -> Prepared:
             M = H @ M
             warped = True
 
-    # 3) Hintergrund ausgleichen + Kontrast
+    # 3) Hintergrund ausgleichen + Kontrast (Blaupausen / Negative zuerst umkehren)
+    if not warped and float(np.median(gray)) < 110 and float(np.percentile(gray, 98)) > 150:
+        gray = 255 - gray
+        warnings.append("Helle Linien auf dunklem Grund erkannt – Bild wurde umgekehrt.")
     norm = _normalize_background(gray)
 
     # 4) Rauschreduzierung
@@ -74,7 +77,7 @@ def prepare(bgr: np.ndarray, try_perspective: bool = True) -> Prepared:
 
     # 5) Binarisierung + Schräglage
     binary = _binarize(norm)
-    angle = _skew_angle(binary)
+    angle = _skew_angle(binary) if deskew else 0.0
     if abs(angle) > 0.15:
         norm, R = _rotate(norm, angle)
         M = R @ M
@@ -236,6 +239,33 @@ def _clean(binary: np.ndarray) -> np.ndarray:
     keep[(big | (extent >= 12))] = 255
     keep[0] = 0
     return keep[labels]
+
+
+def rotate_prepared(prep: Prepared, angle: float, extra: list[np.ndarray] | None = None):
+    """Dreht das vorbereitete Bild um ``angle`` Grad (gleiche Konvention wie die Schräglagenkorrektur).
+
+    ``extra``: weitere Bilder gleicher Grösse (z.B. Klassenbilder), werden mit 'nearest' mitgedreht.
+    """
+    norm, R = _rotate(prep.gray, angle)
+    binary = _clean(_binarize(norm))
+    h, w = norm.shape
+    rot_extra = []
+    for img in extra or []:
+        if img.ndim == 3:
+            rot_extra.append(cv2.warpAffine(img, R[:2], (w, h), flags=cv2.INTER_LINEAR, borderValue=0))
+        else:
+            rot_extra.append(cv2.warpAffine(img, R[:2], (w, h), flags=cv2.INTER_NEAREST, borderValue=0))
+    out = Prepared(norm, binary, R @ prep.M, prep.resize_factor, prep.warped, prep.deskew_deg + angle,
+                   list(prep.warnings))
+    return out, rot_extra
+
+
+def warp_prepared(prep: Prepared, H: np.ndarray, size: tuple[int, int]) -> Prepared:
+    """Wendet eine Homographie (Perspektivkorrektur) auf das vorbereitete Bild an."""
+    w, h = size
+    norm = cv2.warpPerspective(prep.gray, H, (w, h), flags=cv2.INTER_CUBIC, borderValue=255)
+    binary = _clean(_binarize(norm))
+    return Prepared(norm, binary, H @ prep.M, prep.resize_factor, True, prep.deskew_deg, list(prep.warnings))
 
 
 def transform_point(M: np.ndarray, x: float, y: float) -> tuple[float, float]:

@@ -133,6 +133,7 @@ class Drawing:
     warnings: list[str] = field(default_factory=list)
     info: dict = field(default_factory=dict)
     preview_jpg: bytes = b""          # bereinigtes Bild (für Vergleichsansicht)
+    semantic: object = None           # erkannte Wände/Öffnungen (essential.SemanticPlan) für IFC/3D
 
     def layer_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {}

@@ -213,6 +213,7 @@
       wall_height: num("#s3WallH"), auto_thickness: autoThick.checked, default_thickness: num("#s3Thick"),
       door_height: num("#s3DoorH"), window_height: num("#s3WinH"), sill_height: num("#s3Sill"),
       storeys: storeyRows(), plan_storey: planStorey.value,
+      detail: $("#optAll").checked ? "all" : "essential",
     };
   }
   function saveSettings3d(v) { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(v)); } catch (_) { /* egal */ } }
@@ -224,6 +225,7 @@
       set("#s3WallH", v.wall_height); set("#s3Thick", v.default_thickness); set("#s3DoorH", v.door_height);
       set("#s3WinH", v.window_height); set("#s3Sill", v.sill_height);
       autoThick.checked = v.auto_thickness !== false;
+      $("#optAll").checked = v.detail === "all";
     }
     $("#s3Thick").disabled = autoThick.checked;
     renderStoreys(v && v.storeys && v.storeys.length ? v.storeys : DEFAULT_STOREYS, v ? v.plan_storey : "auto");
@@ -231,7 +233,7 @@
   loadSettings3d();
 
   // ------------------------------------------------------------ Verarbeitung
-  const STEP_LABELS = ["Datei wird analysiert …", "Linien werden erkannt …", "Plan wird vektorisiert …",
+  const STEP_LABELS = ["Plan wird ausgerichtet, Wände und Öffnungen werden erkannt …", "Linien werden erkannt …", "Plan wird vektorisiert …",
     "Dateien werden erstellt …", "IFC- und 3D-Modell werden erstellt …"];
 
   function renderSteps(stages, current) {
@@ -280,7 +282,11 @@
     $("#notices").innerHTML = (r.warnings || []).map((w) => `<li>${ICON_WARN}<span>${escapeHtml(w)}</span></li>`).join("");
 
     const order = ["WALLS", "DOORS", "WINDOWS", "STAIRS", "TEXT", "DIMENSIONS", "LINES", "SYMBOLS"];
-    const parts = order.filter((k) => r.layers[k]).map((k) => `${LAYER_NAMES[k]} ${r.layers[k]}`);
+    const rec = r.info && r.info.recognition;
+    const parts = rec
+      ? [`${rec.walls} Wandabschnitte`, `${rec.doors} Türen`, `${rec.windows} Fenster`,
+        ...["STAIRS", "TEXT", "DIMENSIONS", "LINES", "SYMBOLS"].filter((k) => r.layers[k]).map((k) => `${LAYER_NAMES[k]} ${r.layers[k]}`)]
+      : order.filter((k) => r.layers[k]).map((k) => `${LAYER_NAMES[k]} ${r.layers[k]}`);
     const unit = r.unit === "mm" ? "Einheit mm" : "Einheit Pixel";
     $("#summary").textContent = [r.scale_note, unit, parts.join(" · ")].filter(Boolean).join("  ·  ");
 

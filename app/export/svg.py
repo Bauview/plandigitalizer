@@ -1,7 +1,6 @@
 """SVG für die Vorschau im Browser."""
 from __future__ import annotations
 
-import math
 from html import escape
 
 from ..pipeline.geometry import Arc, Circle, Drawing, Hatch, Line, Polyline, Text

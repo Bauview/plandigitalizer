@@ -82,7 +82,9 @@ def finish(tsvs_json: str, ocr_ok: bool, calibration_json: str, settings_json: s
         tsvs = json.loads(tsvs_json or "[]")
         texts = texts_from_tsv(tsvs, st.prep.gray.shape, _state["k"], _state["h_img"]) if ocr_ok else []
         calibration = json.loads(calibration_json) if calibration_json else None
-        drawing = stage_finish(st, texts, bool(ocr_ok), calibration, report)
+        settings = json.loads(settings_json or "{}")
+        essential_only = not (isinstance(settings, dict) and settings.get("detail") == "all")
+        drawing = stage_finish(st, texts, bool(ocr_ok), calibration, report, essential_only=essential_only)
 
         report(3)
         stem = _safe_stem(name)
@@ -97,14 +99,14 @@ def finish(tsvs_json: str, ocr_ok: bool, calibration_json: str, settings_json: s
             "scale_note": drawing.scale_note,
             "unit": drawing.unit,
             "layers": drawing.layer_counts(),
-            "info": {k: v for k, v in drawing.info.items() if isinstance(v, (int, float, str, bool, list, type(None)))},
+            "info": {k: v for k, v in drawing.info.items() if isinstance(v, (int, float, str, bool, list, dict, type(None)))},
             "processed": str(OUT / "processed.jpg"),
             "size": [drawing.width, drawing.height],
         }
 
         report(4)
         try:
-            bim = build_bim(drawing, Settings3D.from_dict(json.loads(settings_json or "{}")), stem)
+            bim = build_bim(drawing, Settings3D.from_dict(settings), stem)
             files["ifc"] = OUT / f"{stem}.ifc"
             files["ifc"].write_text(bim.ifc_text, encoding="utf-8")
             result["bim"] = {"available": True, "summary": bim.model.summary(), "model3d": bim.model3d}

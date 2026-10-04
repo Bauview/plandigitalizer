@@ -29,7 +29,11 @@ def samples():
 def test_pipeline_outputs(name, tmp_path):
     d = run_pipeline(SAMPLES / name)
     counts = d.layer_counts()
-    assert counts.get("WALLS", 0) >= 4, counts
+    rec = d.info.get("recognition")
+    if rec:   # Erkennung mit Netz: Wände als zusammenhängende Umrisse
+        assert rec["walls"] >= 4 and counts.get("WALLS", 0) >= 1, (rec, counts)
+    else:
+        assert counts.get("WALLS", 0) >= 4, counts
     write_dxf(d, tmp_path / "out.dxf")
     write_pdf(d, tmp_path / "out.pdf")
     svg = render_svg(d)

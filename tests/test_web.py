@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_app_zip_is_current():
     z = zipfile.ZipFile(ROOT / "web" / "py" / "app.zip")
     packed = {n: z.read(n) for n in z.namelist()}
-    for p in (ROOT / "app").rglob("*.py"):
+    for p in [*(ROOT / "app").rglob("*.py"), *(ROOT / "app").rglob("*.onnx")]:
         rel = str(p.relative_to(ROOT))
         assert rel in packed, f"{rel} fehlt – bitte 'python3 tools/build_web.py' ausführen"
         assert packed[rel] == p.read_bytes(), f"{rel} veraltet – bitte 'python3 tools/build_web.py' ausführen"
@@ -23,3 +23,8 @@ def test_web_files_present():
     # Cloudflare Pages: max. 25 MiB pro Datei
     big = [p for p in (ROOT / "web").rglob("*") if p.is_file() and p.stat().st_size > 25 * 1024 * 1024]
     assert not big, big
+
+
+def test_model_present():
+    m = ROOT / "app" / "models" / "plannet.onnx"
+    assert m.exists() and 0.5e6 < m.stat().st_size < 20e6

@@ -2,7 +2,6 @@
 d.h. Ebenen lassen sich z.B. in Acrobat ein- und ausblenden."""
 from __future__ import annotations
 
-import math
 from pathlib import Path
 
 import pymupdf as fitz

@@ -114,6 +114,8 @@ main.wrap { flex: 1; padding-top: 72px; padding-bottom: 48px; }
 .calib-help.ok { color: var(--accent); }
 .actions { margin-top: 24px; display: flex; justify-content: flex-end; }
 .actions.center { justify-content: center; margin-top: 28px; }
+.actions-split { justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
+.actions-split .check { color: var(--muted); }
 
 /* Verarbeitung */
 .card { border: 1px solid var(--line); border-radius: 14px; background: #fff; }

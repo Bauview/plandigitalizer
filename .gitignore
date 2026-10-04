@@ -6,3 +6,5 @@ tests/output/
 tests/samples/
 .DS_Store
 Thumbs.db
+data/
+runs/

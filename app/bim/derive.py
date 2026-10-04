@@ -22,8 +22,8 @@ import cv2
 import numpy as np
 
 from ..pipeline.geometry import Arc, Drawing, Hatch, Line, Text
-from ..pipeline.thinning import thinning
 from ..pipeline.vectorize import _orthogonalize
+from ..pipeline.walls import decompose, footprint as _footprint, is_external as _is_external, merge_rects, sample as _sample
 from .model import (SOURCE_ASSUMED, SOURCE_MEASURED, BuildingModel, Opening, Settings3D, Slab, Space,
                     Stair, Storey, Wall)
 
@@ -56,50 +56,59 @@ def derive_model(d: Drawing, s: Settings3D) -> BuildingModel:
     lines = [e for e in d.entities if isinstance(e, Line)]
     texts = [e for e in d.entities if isinstance(e, Text)]
 
-    # ------------------------------------------------------------ 1) Wandmaske
-    mask = np.zeros((H, W), np.uint8)
-    for e in d.entities:
-        if isinstance(e, Hatch) and e.layer == "HATCH" and e.rings:
-            cv2.fillPoly(mask, [_ring(e.rings[0])], 255)
-            for hole in e.rings[1:]:
-                cv2.fillPoly(mask, [_ring(hole)], 0)
-    _fill_wall_pairs(mask, [l for l in lines if l.layer == "WALLS" and (l.is_h or l.is_v)], tmin, tmax)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
-    if np.count_nonzero(mask) * k * k < 0.5:
-        raise ModelError("Im Plan wurden keine Wände erkannt – ein 3D-Modell kann nicht abgeleitet werden.")
-
-    # ------------------------------------------------------------ 2) Öffnungen
-    openings_px: list[dict] = []
-    for rect in _window_rects([l for l in lines if l.layer == "WINDOWS"], px(0.45)):
-        _extend_to_jambs(rect, mask, px(0.3))
-        openings_px.append({"kind": "window", **rect})
-    door_skipped = 0
-    for a in (e for e in d.entities if isinstance(e, Arc) and e.layer == "DOORS"):
-        rect = _door_rect(a, mask, tmax)
-        if rect:
-            openings_px.append({"kind": "door", **rect})
-        else:
-            door_skipped += 1
-    ext = px(0.06)   # Öffnung leicht in die Leibung verlängern, damit die Wand durchgehend wird
-    for o in openings_px:
-        ex, ey = (ext, 0) if o["orient"] == "h" else (0, ext)
-        cv2.rectangle(mask, (int(o["x0"] - ex), int(o["y0"] - ey)),
-                      (int(math.ceil(o["x1"] + ex)), int(math.ceil(o["y1"] + ey))), 255, -1)
-
-    # Kleine freistehende Teile (Kamin, Stütze, Schacht) sind keine Wände
-    n_c, lab_c, st_c, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    sem = getattr(d, "semantic", None)
     freestanding = 0
-    for i in range(1, n_c):
-        if max(st_c[i, cv2.CC_STAT_WIDTH], st_c[i, cv2.CC_STAT_HEIGHT]) * k < 1.2 and st_c[i, cv2.CC_STAT_AREA] * k * k < 1.0:
-            mask[lab_c == i] = 0
-            freestanding += 1
+    door_skipped = 0
+    if sem is not None and sem.rects:
+        # ------------------------------------------------------------ Erkennung (Netz) übernehmen
+        mask = sem.band.copy()
+        openings_px = [o.as_dict() for o in sem.openings]
+        rects = [r for r in sem.rects if max(r[2] - r[0], r[3] - r[1]) * k >= 0.1]
+        model_notes_leftover = bool(np.count_nonzero(sem.leftover))
+    else:
+        model_notes_leftover = False
+        # ------------------------------------------------------------ 1) Wandmaske
+        mask = np.zeros((H, W), np.uint8)
+        for e in d.entities:
+            if isinstance(e, Hatch) and e.layer == "HATCH" and e.rings:
+                cv2.fillPoly(mask, [_ring(e.rings[0])], 255)
+                for hole in e.rings[1:]:
+                    cv2.fillPoly(mask, [_ring(hole)], 0)
+        _fill_wall_pairs(mask, [l for l in lines if l.layer == "WALLS" and (l.is_h or l.is_v)], tmin, tmax)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+        if np.count_nonzero(mask) * k * k < 0.5:
+            raise ModelError("Im Plan wurden keine Wände erkannt – ein 3D-Modell kann nicht abgeleitet werden.")
 
-    # kleine Fugen (Wandende knapp vor anschliessender Wand) schliessen
-    gk = max(3, int(px(0.14)) | 1)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (gk, gk)))
+        # ------------------------------------------------------------ 2) Öffnungen
+        openings_px: list[dict] = []
+        for rect in _window_rects([l for l in lines if l.layer == "WINDOWS"], px(0.45)):
+            _extend_to_jambs(rect, mask, px(0.3))
+            openings_px.append({"kind": "window", **rect})
+        for a in (e for e in d.entities if isinstance(e, Arc) and e.layer == "DOORS"):
+            rect = _door_rect(a, mask, tmax)
+            if rect:
+                openings_px.append({"kind": "door", **rect})
+            else:
+                door_skipped += 1
+        ext = px(0.06)   # Öffnung leicht in die Leibung verlängern, damit die Wand durchgehend wird
+        for o in openings_px:
+            ex, ey = (ext, 0) if o["orient"] == "h" else (0, ext)
+            cv2.rectangle(mask, (int(o["x0"] - ex), int(o["y0"] - ey)),
+                          (int(math.ceil(o["x1"] + ex)), int(math.ceil(o["y1"] + ey))), 255, -1)
 
-    # ------------------------------------------------------------ 3) Wände
-    rects = _merge_rects(_decompose(mask, px(0.6)), px(0.08))
+        # Kleine freistehende Teile (Kamin, Stütze, Schacht) sind keine Wände
+        n_c, lab_c, st_c, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        for i in range(1, n_c):
+            if max(st_c[i, cv2.CC_STAT_WIDTH], st_c[i, cv2.CC_STAT_HEIGHT]) * k < 1.2 and st_c[i, cv2.CC_STAT_AREA] * k * k < 1.0:
+                mask[lab_c == i] = 0
+                freestanding += 1
+
+        # kleine Fugen (Wandende knapp vor anschliessender Wand) schliessen
+        gk = max(3, int(px(0.14)) | 1)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (gk, gk)))
+
+        # ------------------------------------------------------------ 3) Wände
+        rects = merge_rects(decompose(mask, px(0.6), keep_rest=False)[0], px(0.08))
     footprint = _footprint(mask, int(px(1.3)))
     outside = cv2.bitwise_not(footprint)
 
@@ -236,6 +245,8 @@ def derive_model(d: Drawing, s: Settings3D) -> BuildingModel:
     for st in model.storeys:
         if not st.is_plan:
             model.not_created.append(f"{st.name}: keine Bauteile (für dieses Geschoss wurde kein Grundriss hochgeladen).")
+    if model_notes_leftover:
+        model.not_created.append("Schräge oder runde Wandteile – nur im 2D-Plan enthalten.")
     if freestanding:
         model.not_created.append(f"{freestanding} kleine freistehende Element(e) (z.B. Kamin, Stütze) – nicht als Wand übernommen.")
     if door_skipped:
@@ -334,12 +345,6 @@ def _boxes_touch(a, b, tol) -> bool:
     return not (a[2] + tx < b[0] or b[2] + tx < a[0] or a[3] + ty < b[1] or b[3] + ty < a[1])
 
 
-def _sample(mask: np.ndarray, x: float, y: float) -> bool:
-    h, w = mask.shape
-    xi, yi = int(round(x)), int(round(y))
-    return 0 <= xi < w and 0 <= yi < h and mask[yi, xi] > 0
-
-
 def _door_rect(a: Arc, mask: np.ndarray, tmax: float):
     """Bestimmt die Wandöffnung einer Tür anhand des Türbogens."""
     cx, cy = a.center
@@ -399,119 +404,6 @@ def _nearest_run(vals: list[bool], zero: int, tol: float):
         if dist <= tol and (bd is None or dist < bd):
             best, bd = (r0, r1 + 1), dist
     return best
-
-
-def _decompose(mask: np.ndarray, min_long: float) -> list[tuple]:
-    """Zerlegt die Wandmaske in achsparallele Wandrechtecke (x0, y0, x1, y1, 'h'|'v')."""
-    dt = cv2.distanceTransform(mask, cv2.DIST_L2, 3)
-    sk = thinning(mask) > 0
-    t_est = float(np.median(2 * dt[sk])) if np.any(sk) else 10.0
-    L = int(max(3 * t_est, min_long))
-    Hm = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((1, L), np.uint8))
-    Vm = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((L, 1), np.uint8))
-    # Kreuzungen/Ecken der dickeren Wand zuordnen (T-Stoss: Innenwand endet an der Aussenwand)
-    inter = cv2.bitwise_and(Hm, Vm)
-    n_i, lab_i, st_i, _ = cv2.connectedComponentsWithStats(inter, connectivity=4)
-    to_v = np.zeros(n_i, bool)
-    for i in range(1, n_i):
-        to_v[i] = st_i[i, cv2.CC_STAT_WIDTH] > 1.25 * st_i[i, cv2.CC_STAT_HEIGHT]
-    Hm[to_v[lab_i]] = 0
-    Vm[(lab_i > 0) & ~to_v[lab_i]] = 0
-    rest = cv2.bitwise_and(mask, cv2.bitwise_not(cv2.bitwise_or(Hm, Vm)))
-    rest = cv2.morphologyEx(rest, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
-
-    rects: list[tuple] = []
-    for part, orient in ((Hm, "h"), (Vm, "v")):
-        n, lab, stats, _ = cv2.connectedComponentsWithStats(part, connectivity=4)
-        for i in range(1, n):
-            x, y, w, h, area = stats[i]
-            if area < 0.25 * t_est * t_est:
-                continue
-            comp = lab[y:y + h, x:x + w] == i
-            if orient == "h":
-                counts = comp.sum(axis=0)
-                rows = np.arange(h)[:, None]
-                mids = (comp * rows).sum(axis=0) / np.maximum(counts, 1)
-                ok = counts > 0
-                t = float(np.median(counts[ok]))
-                c = float(np.median(mids[ok])) + y + 0.5
-                rects.append((float(x), c - t / 2, float(x + w), c + t / 2, "h"))
-            else:
-                counts = comp.sum(axis=1)
-                cols = np.arange(w)[None, :]
-                mids = (comp * cols).sum(axis=1) / np.maximum(counts, 1)
-                ok = counts > 0
-                t = float(np.median(counts[ok]))
-                c = float(np.median(mids[ok])) + x + 0.5
-                rects.append((c - t / 2, float(y), c + t / 2, float(y + h), "v"))
-    n, lab, stats, _ = cv2.connectedComponentsWithStats(rest, connectivity=4)
-    for i in range(1, n):
-        x, y, w, h, area = stats[i]
-        if area < 0.5 * t_est * t_est or max(w, h) < 0.8 * t_est:
-            continue
-        rects.append((float(x), float(y), float(x + w), float(y + h), "h" if w >= h else "v"))
-    return rects
-
-
-def _is_external(outside: np.ndarray, r: tuple) -> bool:
-    """Aussenwand, wenn eine Längsseite (mittlere 60 %) an den Aussenraum grenzt."""
-    x0, y0, x1, y1, orient = r
-    off = 4
-    if orient == "h":
-        xs = np.linspace(x0 + 0.2 * (x1 - x0), x1 - 0.2 * (x1 - x0), 15)
-        sides = [[(x, y0 - off) for x in xs], [(x, y1 + off) for x in xs]]
-    else:
-        ys = np.linspace(y0 + 0.2 * (y1 - y0), y1 - 0.2 * (y1 - y0), 15)
-        sides = [[(x0 - off, y) for y in ys], [(x1 + off, y) for y in ys]]
-    return any(np.mean([_sample(outside, x, y) for x, y in side]) > 0.4 for side in sides)
-
-
-def _merge_rects(rects: list[tuple], gap: float) -> list[tuple]:
-    """Fügt kollineare, aneinanderstossende Wandstücke gleicher Richtung zusammen."""
-    out = list(rects)
-    changed = True
-    while changed:
-        changed = False
-        for i in range(len(out)):
-            for j in range(i + 1, len(out)):
-                a, b = out[i], out[j]
-                if a[4] != b[4]:
-                    continue
-                h = a[4] == "h"
-                ac0, ac1 = (a[1], a[3]) if h else (a[0], a[2])
-                bc0, bc1 = (b[1], b[3]) if h else (b[0], b[2])
-                ta, tb = ac1 - ac0, bc1 - bc0
-                if abs((ac0 + ac1) - (bc0 + bc1)) / 2 > 0.5 * min(ta, tb) or abs(ta - tb) > 0.6 * max(ta, tb):
-                    continue
-                aa0, aa1 = (a[0], a[2]) if h else (a[1], a[3])
-                ba0, ba1 = (b[0], b[2]) if h else (b[1], b[3])
-                if ba0 > aa1 + gap or aa0 > ba1 + gap:
-                    continue
-                la, lb = aa1 - aa0, ba1 - ba0
-                c = ((ac0 + ac1) / 2 * la + (bc0 + bc1) / 2 * lb) / (la + lb)
-                t = (ta * la + tb * lb) / (la + lb)
-                lo, hi = min(aa0, ba0), max(aa1, ba1)
-                merged = (lo, c - t / 2, hi, c + t / 2, "h") if h else (c - t / 2, lo, c + t / 2, hi, "v")
-                out[i] = merged
-                del out[j]
-                changed = True
-                break
-            if changed:
-                break
-    return out
-
-
-def _footprint(mask: np.ndarray, close_px: int) -> np.ndarray:
-    """Gebäudegrundfläche: Wandmaske mit geschlossenen Lücken, Innenräume gefüllt."""
-    k = max(3, close_px | 1)
-    closed = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (k, k)))
-    h, w = closed.shape
-    pad = np.zeros((h + 2, w + 2), np.uint8)
-    pad[1:-1, 1:-1] = closed
-    ff = pad.copy()
-    cv2.floodFill(ff, np.zeros((h + 4, w + 4), np.uint8), (0, 0), 128)
-    outside = (ff[1:-1, 1:-1] == 128)
-    return np.where(outside, 0, 255).astype(np.uint8)
 
 
 def _stairs(lines: list[Line], gap: float, m, k: float, storey_h: float) -> list[Stair]:

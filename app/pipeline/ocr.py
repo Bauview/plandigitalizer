@@ -199,7 +199,9 @@ def filter_by_ink(texts: list[Text], binary: np.ndarray) -> list[Text]:
         inside = ((cx >= x0 - pad) & (cy >= y0 - pad) & (cx + cw <= x1 + pad) & (cy + ch <= y1 + pad) & (area >= 3))
         inside[0] = False
         nchars = len(t.text.replace(" ", ""))
-        if np.count_nonzero(inside) < max(1, math.ceil(0.6 * nchars)):
+        sure_word = t.conf >= 75 and sum(c.isalpha() for c in t.text) >= 4
+        need = max(1, math.ceil((0.25 if sure_word else 0.6) * nchars))
+        if np.count_nonzero(inside) < need:
             continue
         bw, bh = max(1, x1 - x0), max(1, y1 - y0)
         if np.any(inside & (cw > 0.7 * bw) & (ch > 0.7 * bh)) and nchars > 1:

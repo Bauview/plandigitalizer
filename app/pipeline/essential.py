@@ -20,6 +20,7 @@ from .geometry import Arc, Hatch, Line, Polyline, Text
 from .semantic import DOOR, WALL, WINDOW
 from .vectorize import _orthogonalize
 from .walls import decompose, footprint, median_thickness, merge_rects, raster_rects
+from . import trace
 
 
 @dataclass
@@ -60,6 +61,15 @@ def reconstruct(labels: np.ndarray, binary: np.ndarray) -> SemanticPlan | None:
         return None
     t = max(2.0, t)
     ink = (binary > 0).astype(np.uint8)
+    # dünne, nur als Doppellinie gezeichnete Wände (Leichtbau) ergänzen, die das Netz übersehen hat
+    thin = trace.double_line_walls(binary, labels, t)
+    if np.any(thin):
+        labels = labels.copy()
+        labels[thin > 0] = WALL
+        wall = ((labels == WALL) * 255).astype(np.uint8)
+        thin_d = cv2.dilate(thin, np.ones((3, 3), np.uint8)) > 0
+    else:
+        thin_d = None
 
     # ------------------------------------------------------------ 1) bereinigen
     k3 = np.ones((3, 3), np.uint8)
@@ -92,6 +102,8 @@ def reconstruct(labels: np.ndarray, binary: np.ndarray) -> SemanticPlan | None:
             x, y, w, h, area = st[i]
             if area < 0.35 * t * t or max(w, h) < 0.9 * t:
                 continue
+            if thin_d is not None and np.count_nonzero(thin_d[y:y + h, x:x + w] & (lab[y:y + h, x:x + w] == i)) > 0.5 * area:
+                continue                    # liegt in einer durchgehend gezeichneten Leichtbauwand
             o = _opening_rect(kind, x, y, w, h, wall, t)
             if o is not None:
                 openings.append(o)
@@ -115,7 +127,7 @@ def reconstruct(labels: np.ndarray, binary: np.ndarray) -> SemanticPlan | None:
         if o.kind != "door":
             continue
         o.swing = _door_swing(o, tol_ink)
-        if not o.swing and _faces_continuous(o, ink, t):
+        if (not o.swing or len(o.swing) == 2) and _faces_continuous(o, ink, t):
             fake.append(o)
     for o in fake:
         cv2.rectangle(wall, (int(o.x0), int(o.y0)), (int(math.ceil(o.x1)) - 1, int(math.ceil(o.y1)) - 1), 255, -1)
@@ -152,7 +164,7 @@ def reconstruct(labels: np.ndarray, binary: np.ndarray) -> SemanticPlan | None:
         if o.kind == "door" and not o.swing:
             o.swing = _door_swing(o, tol_ink)
     openings = [o for o in openings
-                if not (o.kind == "door" and not o.swing and _faces_continuous(o, ink, t))]
+                if not (o.kind == "door" and (not o.swing or len(o.swing) == 2) and _faces_continuous(o, ink, t))]
     walls = band_clean.copy()
     for o in openings:
         ex = 2
@@ -167,7 +179,24 @@ def reconstruct(labels: np.ndarray, binary: np.ndarray) -> SemanticPlan | None:
             walls[lab == i] = 0
 
     sp = SemanticPlan(rects, leftover, openings, t, band_clean, walls)
-    sp.entities = _wall_entities(walls, t)
+    # Wandgeometrie 1:1 aus der gezeichneten Tinte nachzeichnen (schräge Leibungen, Nischen ...)
+    sw = trace.stroke_width(binary, walls, t)
+    omask = np.zeros((H, W), np.uint8)
+    for o in openings:              # Öffnungen: Leibungslinien liegen darin und gehören zur Wand
+        x0, y0, x1, y1 = o.x0, o.y0, o.x1, o.y1
+        if x1 > x0 and y1 > y0:
+            cv2.rectangle(omask, (int(round(x0)), int(round(y0))), (int(round(x1)) - 1, int(round(y1)) - 1), 255, -1)
+    material = trace.wall_material(binary, walls, omask, t, sw, rects)
+    regions = trace.wall_rings(material, sw, t)
+    if regions:
+        traced = np.zeros((H, W), np.uint8)
+        for rings in regions:
+            cv2.fillPoly(traced, [np.round(np.array(r) - 0.5).astype(np.int32) for r in rings], 255)
+        sp.walls = traced
+        sp.stroke_px = sw
+        sp.entities = _region_entities(regions)
+    else:
+        sp.entities = _wall_entities(walls, t)
     return sp
 
 
@@ -554,6 +583,15 @@ def _wall_entities(walls: np.ndarray, t: float) -> list:
         rings = [r for r in rings if len(r) >= 3]
         if not rings:
             continue
+        for r in rings:
+            ents.append(Polyline(r, True, "WALLS"))
+        ents.append(Hatch(rings, "HATCH"))
+    return ents
+
+
+def _region_entities(regions) -> list:
+    ents: list = []
+    for rings in regions:
         for r in rings:
             ents.append(Polyline(r, True, "WALLS"))
         ents.append(Hatch(rings, "HATCH"))

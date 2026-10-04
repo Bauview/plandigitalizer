@@ -212,7 +212,9 @@ def filter_by_ink(texts: list[Text], binary: np.ndarray) -> list[Text]:
         if roi.size == 0:
             continue
         ink = np.count_nonzero(roi) / roi.size
-        if not 0.04 <= ink <= 0.55:
+        # fette Schrift auf unscharfen Bildern füllt die Box stark; sicher gelesene Wörter/Masszahlen zulassen
+        sure = (t.conf >= 85 and sum(c.isalpha() for c in t.text) >= 3) or (t.conf >= 75 and sum(c.isalpha() for c in t.text) >= 5) or (t.conf >= 85 and re.fullmatch(r"\d{1,3}[.,]\d{1,2}", t.text.strip()))
+        if not 0.04 <= ink <= (0.75 if sure else 0.55):
             continue
         pad = max(2.0, 0.25 * t.height)
         inside = ((cx >= x0 - pad) & (cy >= y0 - pad) & (cx + cw <= x1 + pad) & (cy + ch <= y1 + pad) & (area >= 3))
@@ -223,7 +225,7 @@ def filter_by_ink(texts: list[Text], binary: np.ndarray) -> list[Text]:
         if np.count_nonzero(inside) < need:
             continue
         bw, bh = max(1, x1 - x0), max(1, y1 - y0)
-        if np.any(inside & (cw > 0.7 * bw) & (ch > 0.7 * bh)) and nchars > 1:
+        if np.any(inside & (cw > 0.7 * bw) & (ch > 0.7 * bh)) and nchars > 1 and not (sure and t.conf >= 90):
             continue
         out.append(t)
     return out

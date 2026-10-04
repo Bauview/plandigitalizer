@@ -985,6 +985,19 @@ def room_stamps(sp: SemanticPlan, texts: list, mm_per_px: float | None, binary: 
     H, W = lab.shape
     by_room: dict[int, list] = {}
     valid = {rm.label for rm in rms}
+    # Texte in kleinen/offenen Bereichen des Gebäudes (z.B. Räume mit nicht geschlossenen Wänden)
+    # bilden ebenfalls Stempel, nur ohne Flächenprüfung
+    foot = footprint_mask(sp)
+    extra: dict[int, Room] = {}
+    for tx in texts:
+        cx, cy = tx.center
+        xi, yi = int(cx), int(cy)
+        if 0 <= xi < W and 0 <= yi < H and foot[yi, xi] and int(lab[yi, xi]) not in valid:
+            key = -(1 + len(extra)) if int(lab[yi, xi]) == 0 else int(lab[yi, xi])
+            if key not in extra:
+                extra[key] = Room(key, 0.0, (cx, cy), (xi, yi, 1, 1))
+            by_room.setdefault(key, []).append(tx)
+    rms = list(rms) + list(extra.values())
     for tx in texts:
         if tx.rotation != 0:
             continue
@@ -995,6 +1008,7 @@ def room_stamps(sp: SemanticPlan, texts: list, mm_per_px: float | None, binary: 
         r = int(lab[yi, xi])
         if r in valid:
             by_room.setdefault(r, []).append(tx)
+    # (Texte in offenen Bereichen sind oben schon zugeordnet)
 
     def area_of(q):
         m_ = _AREA_RE.search(q.text.replace(" ", "")) or _AREA_RE.search(q.text)
@@ -1010,7 +1024,7 @@ def room_stamps(sp: SemanticPlan, texts: list, mm_per_px: float | None, binary: 
         for tx in by_room.get(rm.label, []):
             if _AREA_RE.search(tx.text.replace(" ", "")) or _AREA_RE.search(tx.text):
                 a = area_of(tx)
-                if a and 1.0 <= a <= 500:
+                if a and 1.0 <= a <= 500 and rm.area_px > 0:
                     ratios.append(math.sqrt(a * 1e6 / rm.area_px))
     if len(ratios) >= 2:
         r_ = np.array(ratios)
@@ -1059,7 +1073,7 @@ def room_stamps(sp: SemanticPlan, texts: list, mm_per_px: float | None, binary: 
             used.append(q)
             if kind == "area":
                 txt = f"{val:.1f} m²" if abs(val * 10 - round(val * 10)) < 1e-6 else f"{val:.2f} m²"
-                if mmpp:
+                if mmpp and rm.area_px > 0:
                     meas = rm.area_px * mmpp * mmpp / 1e6
                     if abs(val - meas) > 0.08 * meas:
                         name = " ".join(str(v) for _, k_, v in block if k_ != "area") or "?"

@@ -63,13 +63,17 @@ def reconstruct(labels: np.ndarray, binary: np.ndarray) -> SemanticPlan | None:
     ink = (binary > 0).astype(np.uint8)
     # dünne, nur als Doppellinie gezeichnete Wände (Leichtbau) ergänzen, die das Netz übersehen hat
     thin = trace.double_line_walls(binary, labels, t)
-    if np.any(thin):
+    # schraffierte/gefüllte Wände voller Stärke, die das Netz übersehen hat (Umriss + Schraffur dazwischen)
+    thick = trace.double_line_walls(binary, labels, t, gap_f=1.25, wmin_f=0.6, wmax_f=1.5, min_fill=0.12)
+    thin_d = None
+    if np.any(thin) or np.any(thick):
         labels = labels.copy()
         labels[thin > 0] = WALL
+        # dicke Ergänzungen nur dort, wo das Netz nichts erkannt hat (Öffnungen bleiben Öffnungen)
+        labels[(thick > 0) & (labels == 0)] = WALL
         wall = ((labels == WALL) * 255).astype(np.uint8)
-        thin_d = cv2.dilate(thin, np.ones((3, 3), np.uint8)) > 0
-    else:
-        thin_d = None
+        if np.any(thin):
+            thin_d = cv2.dilate(thin, np.ones((3, 3), np.uint8)) > 0
 
     # ------------------------------------------------------------ 1) bereinigen
     k3 = np.ones((3, 3), np.uint8)
@@ -105,6 +109,8 @@ def reconstruct(labels: np.ndarray, binary: np.ndarray) -> SemanticPlan | None:
             if thin_d is not None and np.count_nonzero(thin_d[y:y + h, x:x + w] & (lab[y:y + h, x:x + w] == i)) > 0.5 * area:
                 continue                    # liegt in einer durchgehend gezeichneten Leichtbauwand
             o = _opening_rect(kind, x, y, w, h, wall, t)
+            if o is not None and thin_d is not None and _axis_cover(o, thin_d) > 0.6:
+                continue                    # Mittellinie der "Öffnung" verläuft in einer Leichtbauwand
             if o is not None:
                 openings.append(o)
     openings = _dedupe(openings)
@@ -201,6 +207,20 @@ def reconstruct(labels: np.ndarray, binary: np.ndarray) -> SemanticPlan | None:
 
 
 # =============================================================================== Öffnungen
+def _axis_cover(o: "Opening", mask: np.ndarray) -> float:
+    """Anteil der Öffnungs-Mittellinie (in Wandrichtung), der in ``mask`` liegt."""
+    H, W = mask.shape
+    if o.orient == "h":
+        c = int((o.y0 + o.y1) / 2)
+        xs = np.arange(int(o.x0), int(math.ceil(o.x1)))
+        xs = xs[(xs >= 0) & (xs < W)]
+        return float(mask[c, xs].mean()) if 0 <= c < H and xs.size else 0.0
+    c = int((o.x0 + o.x1) / 2)
+    ys = np.arange(int(o.y0), int(math.ceil(o.y1)))
+    ys = ys[(ys >= 0) & (ys < H)]
+    return float(mask[ys, c].mean()) if 0 <= c < W and ys.size else 0.0
+
+
 def _frac(mask, x0, y0, x1, y1) -> float:
     H, W = mask.shape
     x0, y0, x1, y1 = max(0, int(x0)), max(0, int(y0)), min(W, int(x1)), min(H, int(y1))
@@ -783,7 +803,12 @@ def _window_from_ink(o: Opening, ink: np.ndarray, wall_cut: np.ndarray, t: float
         if eb - ea < 0.5 * span:
             continue
         pos.append((fc, ea, eb, r0, r1))
-        ents.append(Line(P(ea, fc), P(eb, fc), "WINDOWS"))
+        if r1 - r0 >= max(6, 0.15 * T):
+            # Rahmen mit Glas in grober Auflösung zu einem Band verschmolzen: beide Rahmenkanten zeichnen
+            for fe in (F0 + r0 + 1.5, F0 + r1 - 1.5):
+                ents.append(Line(P(ea, fe), P(eb, fe), "WINDOWS"))
+        else:
+            ents.append(Line(P(ea, fc), P(eb, fc), "WINDOWS"))
     inside = [p for p in pos if f0 - 1 <= p[0] <= f1 + 1]
     if not inside:
         return []

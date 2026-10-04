@@ -19,7 +19,8 @@ from .semantic import DOOR, WALL, WINDOW
 
 # =============================================================================== dünne Wände
 def double_line_walls(binary: np.ndarray, labels: np.ndarray, t: float, _pass: int = 0,
-                      _anchor: np.ndarray | None = None) -> np.ndarray:
+                      _anchor: np.ndarray | None = None, gap_f: float = 0.55, wmin_f: float = 0.18,
+                      wmax_f: float = 1.1, min_fill: float = 0.0) -> np.ndarray:
     """Wände, die nur als zwei parallele Linien gezeichnet sind (Leichtbau), als Maske (achsparallel).
 
     Zwei lange Linien im Abstand einer dünnen Wand werden quer geschlossen; der Streifen muss lang
@@ -31,11 +32,12 @@ def double_line_walls(binary: np.ndarray, labels: np.ndarray, t: float, _pass: i
     known = labels > 0
     wall_lab = (labels == WALL).astype(np.uint8)
     opening = (labels == WINDOW) | (labels == DOOR)
-    gap = int(max(3, round(0.55 * t)))
+    gap = int(max(3, round(gap_f * t)))
     long_ = int(max(25, 3.0 * t)) if _pass == 0 else int(max(12, 1.0 * t))
     out = np.zeros((H, W), np.uint8)
     side = int(max(4, round(0.6 * t)))
     off = int(max(2, round(0.2 * t)))
+    outside = None
     for horiz in (True, False):
         k_line = np.ones((1, long_), np.uint8) if horiz else np.ones((long_, 1), np.uint8)
         lines = cv2.morphologyEx(ink, cv2.MORPH_OPEN, k_line)
@@ -49,28 +51,54 @@ def double_line_walls(binary: np.ndarray, labels: np.ndarray, t: float, _pass: i
         for i in range(1, n):
             x, y, w, h, a = st[i]
             length, width = (w, h) if horiz else (h, w)
-            if length < long_ or width < 0.18 * t or width > 1.1 * t:
+            if length < long_ or width < wmin_f * t or width > wmax_f * t:
                 continue
             comp = lab[y:y + h, x:x + w] == i
             if comp.mean() < 0.55:
                 continue
+            if min_fill > 0:
+                inner = comp & (lines[y:y + h, x:x + w] == 0)
+                if not inner.any() or (ink[y:y + h, x:x + w][inner] > 0).mean() < min_fill:
+                    continue            # zwischen den Linien keine Schraffur/Füllung -> keine Wand
+                # Plattenraster (Querlinien über die ganze Breite) ist keine Wandschraffur
+                kq = max(3, int(0.8 * width))
+                perp = cv2.morphologyEx(ink[y:y + h, x:x + w], cv2.MORPH_OPEN,
+                                        np.ones((kq, 1), np.uint8) if horiz else np.ones((1, kq), np.uint8))
+                inner_ink = inner & (ink[y:y + h, x:x + w] > 0)
+                if inner_ink.any() and (perp[inner_ink] > 0).mean() > 0.4:
+                    continue
+            if min_fill > 0:
+                R = int(0.6 * t)
+                ya, yb, xa, xb = max(0, y - R), min(H, y + h + R), max(0, x - R), min(W, x + w + R)
+                if opening[ya:yb, xa:xb].any():
+                    continue            # dicke Variante: nicht an erkannten Öffnungen (Fenster in Doppellinien)
             if opening[y:y + h, x:x + w][comp].mean() > 0.5:
                 # Fensterrahmen (schmaler Streifen in breiter Öffnung) oder als Fenster verkannte Leichtbauwand?
-                R = int(1.2 * t)
-                if horiz:
-                    win = opening[max(0, y - R):min(H, y + h + R), x:x + w]
-                    blob_w = np.median(win.sum(axis=0))
-                else:
-                    win = opening[y:y + h, max(0, x - R):min(W, x + w + R)]
-                    blob_w = np.median(win.sum(axis=1))
-                if blob_w > 1.6 * width:
-                    continue
-                # Fenster ist meist mit Glaslinie(n) zwischen den Wandlinien gezeichnet -> mehr als 2 Linien
-                sub = ink[y:y + h, x:x + w] > 0
-                prof = sub.mean(axis=1) if horiz else sub.mean(axis=0)
-                peaks = int(np.sum(np.diff((prof > 0.5).astype(np.int8)) == 1) + (prof[0] > 0.5))
-                if peaks >= 3:
-                    continue
+                # Fenster liegen zwischen zwei Wandstücken in derselben Flucht; eine Leichtbauwand stösst
+                # mit ihren Enden quer an andere Wände (T-Stoss) – das entscheidet, nicht die Netz-Klasse
+                ends = [_end_kind(wall_lab, horiz, x, y, w, h, t, e, dd)
+                        for e in (0, 1) for dd in (0.5, 0.0, -0.5, -1.0)]
+                if outside is None:
+                    from .walls import footprint
+                    outside = footprint((known * 255).astype(np.uint8), int(max(3, 4 * t))) == 0
+                # an der Gebäudehülle (eine Seite aussen) ist es ein Fenster, keine Innenwand
+                exterior = _side_outside(outside, horiz, x, y, w, h, t)
+                if exterior or "cross" not in ends:
+                    R = int(1.2 * t)
+                    if horiz:
+                        win = opening[max(0, y - R):min(H, y + h + R), x:x + w]
+                        blob_w = np.median(win.sum(axis=0))
+                    else:
+                        win = opening[y:y + h, max(0, x - R):min(W, x + w + R)]
+                        blob_w = np.median(win.sum(axis=1))
+                    if blob_w > 1.6 * width:
+                        continue
+                    # Fenster ist meist mit Glaslinie(n) zwischen den Wandlinien gezeichnet -> > 2 Linien
+                    sub = ink[y:y + h, x:x + w] > 0
+                    prof = sub.mean(axis=1) if horiz else sub.mean(axis=0)
+                    peaks = int(np.sum(np.diff((prof > 0.5).astype(np.int8)) == 1) + (prof[0] > 0.5))
+                    if peaks >= 3:
+                        continue
             # läuft parallel neben einer erkannten Wand? (Mittelteil, beidseits abtasten)
             par = 0
             for f in np.linspace(0.2, 0.8, 7):
@@ -97,12 +125,67 @@ def double_line_walls(binary: np.ndarray, labels: np.ndarray, t: float, _pass: i
         if np.any(near[lab == i]):
             keep[i] = 255
     res = keep[lab]
+    if min_fill > 0 and np.any(res):
+        # Flächen statt Streifen (Raster, Muster) verwerfen
+        dt = cv2.distanceTransform(res, cv2.DIST_L2, 3)
+        n, lab, st, _ = cv2.connectedComponentsWithStats(res, connectivity=8)
+        for i in range(1, n):
+            m = lab == i
+            if 2 * dt[m].max() > 1.6 * t:
+                res[m] = 0
     if _pass == 0 and np.any(res):
         # kurze Wandstücke (z.B. neben Türen), die an eben gefundene Wände anschliessen
         lab2 = labels.copy()
         lab2[res > 0] = WALL
-        res = cv2.bitwise_or(res, double_line_walls(binary, lab2, t, 1, res))
+        res = cv2.bitwise_or(res, double_line_walls(binary, lab2, t, 1, res, gap_f, wmin_f, wmax_f, min_fill))
     return res
+
+
+def _side_outside(outside, horiz, x, y, w, h, t) -> bool:
+    """Liegt eine Längsseite des Streifens im Aussenraum (Gebäudehülle)?"""
+    H, W = outside.shape
+    d = int(max(3, 0.8 * t))
+    hits = [0, 0]
+    for f in np.linspace(0.2, 0.8, 7):
+        if horiz:
+            xx = int(x + f * w)
+            pts = [(xx, y - d), (xx, y + h - 1 + d)]
+        else:
+            yy = int(y + f * h)
+            pts = [(x - d, yy), (x + w - 1 + d, yy)]
+        for k, (px, py) in enumerate(pts):
+            if not (0 <= px < W and 0 <= py < H) or outside[py, px]:
+                hits[k] += 1
+    return max(hits) >= 4
+
+
+def _end_kind(wall_lab, horiz, x, y, w, h, t, end, dd=0.5):
+    """Was schliesst an das Ende eines Streifens an? "cross" (quer laufende Wand, T-Stoss/Ecke),
+    "inline" (Wand in derselben Flucht, z.B. beidseits eines Fensters) oder "none"."""
+    H, W = wall_lab.shape
+    d = int(round(dd * t)) if dd != 0.5 else int(max(2, 0.5 * t))
+    R = int(3 * t)
+    if horiz:
+        xx = x - d if end == 0 else x + w - 1 + d
+        if not 0 <= xx < W:
+            return "none"
+        col = wall_lab[max(0, y - R):min(H, y + h + R), xx]
+        c = y + h // 2 - max(0, y - R)
+    else:
+        yy = y - d if end == 0 else y + h - 1 + d
+        if not 0 <= yy < H:
+            return "none"
+        col = wall_lab[yy, max(0, x - R):min(W, x + w + R)]
+        c = x + w // 2 - max(0, x - R)
+    if c >= len(col) or not col[c]:
+        return "none"
+    lo = c
+    while lo > 0 and col[lo - 1]:
+        lo -= 1
+    hi = c
+    while hi < len(col) - 1 and col[hi + 1]:
+        hi += 1
+    return "cross" if hi - lo + 1 > 2.0 * t else "inline"
 
 
 # =============================================================================== Wandflächen

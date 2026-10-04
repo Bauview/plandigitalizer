@@ -51,7 +51,7 @@ ROOMS = [  # Nr, Name, Belag, Stempelposition (m), Rechteck(e) innen
 ]
 
 
-def build(px_m: float, margin_m: float = 3.2):
+def build(px_m: float, margin_m: float = 3.2, variant: str = "hatch"):
     W = int((BW + 2 * margin_m + 1.5) * px_m)
     H = int((BH + 2 * margin_m + 1.0) * px_m)
     ox, oy = margin_m * px_m, margin_m * px_m
@@ -79,8 +79,11 @@ def build(px_m: float, margin_m: float = 3.2):
         style[m > 0] = {"hatch": 1, "light": 2, "concrete": 3}[st]
 
     # Öffnungen ausschneiden (Fenster mit schräger Leibung)
+    SPL = SPLAY if variant == "hatch" else 0.0
+
     def wall_frame(side, a0, a1):
         """Öffnungspolygon in m für eine Aussenwand-Öffnung (mit Leibungsschräge innen)."""
+        SPLAY = SPL
         f = FRAME_D + FRAME_T
         if side == "top":
             return [(a0, -0.01), (a1, -0.01), (a1, f), (a1 + SPLAY, TE + 0.01), (a0 - SPLAY, TE + 0.01), (a0, f)]
@@ -115,7 +118,10 @@ def build(px_m: float, margin_m: float = 3.2):
     step = max(4, int(0.06 * px_m))
     for k in range(-H, W + H, step):
         cv2.line(hatch, (k, 0), (k + H, H), 0, lw_hatch, cv2.LINE_AA)
-    img = np.where(style == 1, np.minimum(img, hatch), img)
+    if variant == "solid":
+        img[style == 1] = 0                     # Wände schwarz gefüllt (ältere Pläne)
+    else:
+        img = np.where(style == 1, np.minimum(img, hatch), img)
     img[style == 3] = 0
     # Umrisse
     cs, _ = cv2.findContours(wall, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
@@ -243,7 +249,8 @@ def build(px_m: float, margin_m: float = 3.2):
         wid = max(int(dr.textlength(t, font=fn)) for t, fn in lines) + 24
         cx, cy = P(sx, sy)
         x0b, y0b = cx - wid // 2, cy - hgt // 2 - 8
-        dr.rectangle([x0b, y0b, x0b + wid, y0b + hgt + 16], outline=0, width=lw_hatch + 1)
+        if variant == "hatch":
+            dr.rectangle([x0b, y0b, x0b + wid, y0b + hgt + 16], outline=0, width=lw_hatch + 1)
         yy = y0b + 8
         for t, fn in lines:
             tw = dr.textlength(t, font=fn)
@@ -277,9 +284,31 @@ def photo(img: np.ndarray) -> np.ndarray:
     return np.clip(out, 0, 255).astype(np.uint8), Hm
 
 
+def old_scan(img: np.ndarray, deg: float = 1.3):
+    """Alter, leicht schräg eingelesener Plan: vergilbt, rauschend, etwas unscharf."""
+    h, w = img.shape
+    R = cv2.getRotationMatrix2D((w / 2, h / 2), deg, 1.0)
+    out = cv2.warpAffine(img, R, (w, h), flags=cv2.INTER_LINEAR, borderValue=255).astype(np.float32)
+    rng = np.random.default_rng(7)
+    paper = 228 + rng.normal(0, 6, (h // 16 + 1, w // 16 + 1))
+    paper = cv2.resize(paper, (w, h), interpolation=cv2.INTER_CUBIC)
+    out = np.minimum(out, paper) * (0.55 + 0.45 * out / 255.0) + rng.normal(0, 5, out.shape)
+    out = cv2.GaussianBlur(out, (0, 0), 1.1)
+    Hm = np.vstack([R, [0, 0, 1]])
+    return np.clip(out, 0, 255).astype(np.uint8), Hm
+
+
 def main():
     OUT.mkdir(exist_ok=True)
     all_truth = {}
+    img, wall, truth = build(300 / 25.4 * 10, variant="solid")
+    cv2.imwrite(str(OUT / "bestand_solid.png"), img)
+    all_truth["bestand_solid"] = {**truth, "wall_file": "bestand_100_wall_solid.png"}
+    cv2.imwrite(str(OUT / "bestand_100_wall_solid.png"), wall)
+    img, wall, truth = build(300 / 25.4 * 10)
+    sc, Hm = old_scan(img)
+    cv2.imwrite(str(OUT / "bestand_scan.jpg"), sc, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    all_truth["bestand_scan"] = {**truth, "H": Hm.tolist()}
     for name, px_m in (("bestand_100", 300 / 25.4 * 10), ("bestand_50", 300 / 25.4 * 20)):
         img, wall, truth = build(px_m)
         cv2.imwrite(str(OUT / f"{name}.png"), img)

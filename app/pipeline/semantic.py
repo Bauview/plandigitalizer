@@ -190,9 +190,11 @@ def dominant_angle(mask: np.ndarray) -> tuple[float, float]:
     k = min(1.0, 2000.0 / max(h, w))
     m = cv2.resize(mask, None, fx=k, fy=k, interpolation=cv2.INTER_AREA) if k < 1 else mask
     m = ((m > 127) * 255).astype(np.uint8)
+    # Kanten glätten (verrauschte Ränder bei alten Scans zerfallen sonst in kurze Stücke)
+    m = ((cv2.GaussianBlur(m, (0, 0), 1.5) > 127) * 255).astype(np.uint8)
     edges = cv2.Canny(m, 50, 150)
     segs = cv2.HoughLinesP(edges, 1, np.pi / 1440, threshold=40,
-                           minLineLength=int(0.04 * max(m.shape)), maxLineGap=4)
+                           minLineLength=int(0.04 * max(m.shape)), maxLineGap=10)
     if segs is None or len(segs) < 2:
         return 0.0, 0.0
     segs = segs.reshape(-1, 4).astype(np.float64)

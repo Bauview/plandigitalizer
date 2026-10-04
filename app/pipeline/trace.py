@@ -271,7 +271,7 @@ def _proj(p, d, x):
 
 
 def clean_ring(pts: np.ndarray, eps: float, min_edge: float, drop_len: float | None = None,
-               short: float = 0.0) -> list[tuple[float, float]]:
+               short: float = 0.0, jog: float = 0.0) -> list[tuple[float, float]]:
     """Polygon vereinfachen, Kanten auf 0/45/90° einrasten (andere Winkel bleiben), Ecken exakt schneiden.
 
     Jede Kante bleibt lokal: Ecken entstehen als Schnitt benachbarter Kanten nur, wenn der Schnittpunkt
@@ -307,7 +307,7 @@ def clean_ring(pts: np.ndarray, eps: float, min_edge: float, drop_len: float | N
     for ln in lines[1:]:
         p = merged[-1]
         if abs(p[1][0] * ln[1][1] - p[1][1] * ln[1][0]) < 1e-3 and p[1][0] * ln[1][0] + p[1][1] * ln[1][1] > 0 \
-                and offset(p, ln) < max(1.0, eps):
+                and offset(p, ln) < max(1.0, eps, jog, min(0.025 * (p[2] + ln[2]), 2.0 * jog)):
             w = p[2] + ln[2]
             merged[-1] = [((p[0][0] * p[2] + ln[0][0] * ln[2]) / w, (p[0][1] * p[2] + ln[0][1] * ln[2]) / w),
                           p[1] if p[2] >= ln[2] else ln[1], w, p[3], ln[4]]
@@ -316,11 +316,36 @@ def clean_ring(pts: np.ndarray, eps: float, min_edge: float, drop_len: float | N
     if len(merged) >= 2:
         p, ln = merged[-1], merged[0]
         if abs(p[1][0] * ln[1][1] - p[1][1] * ln[1][0]) < 1e-3 and p[1][0] * ln[1][0] + p[1][1] * ln[1][1] > 0 \
-                and offset(p, ln) < max(1.0, eps):
+                and offset(p, ln) < max(1.0, eps, jog, min(0.025 * (p[2] + ln[2]), 2.0 * jog)):
             w = p[2] + ln[2]
             merged[0] = [((p[0][0] * p[2] + ln[0][0] * ln[2]) / w, (p[0][1] * p[2] + ln[0][1] * ln[2]) / w),
                          p[1] if p[2] >= ln[2] else ln[1], w, p[3], ln[4]]
             merged.pop()
+
+    def lim(p, q):
+        return max(1.0, eps, jog, min(0.025 * (p[2] + q[2]), 2.0 * jog))
+
+    # kleine Stufen (Kante – kurzer Versatz – parallele Kante) glätten
+    changed = True
+    while changed and len(merged) > 4:
+        changed = False
+        m = len(merged)
+        for i in range(m):
+            a, j, b = merged[i - 1], merged[i], merged[(i + 1) % m]
+            if abs(a[1][0] * b[1][1] - a[1][1] * b[1][0]) < 1e-3 and a[1][0] * b[1][0] + a[1][1] * b[1][1] > 0:
+                L = lim(a, b)
+                if j[2] <= L + 1.0 and offset(a, b) < L:
+                    w = a[2] + b[2]
+                    new = [((a[0][0] * a[2] + b[0][0] * b[2]) / w, (a[0][1] * a[2] + b[0][1] * b[2]) / w),
+                           a[1] if a[2] >= b[2] else b[1], w, a[3], b[4]]
+                    ia, ib = (i - 1) % m, (i + 1) % m
+                    keep = [x for k, x in enumerate(merged) if k not in (ia, i, ib)]
+                    # neue Kante an die Stelle von a setzen
+                    pos = sum(1 for k in range(m) if k < ia and k not in (i, ib))
+                    keep.insert(pos, new)
+                    merged = keep
+                    changed = True
+                    break
     m = len(merged)
     if m < 3:
         return []
@@ -349,8 +374,8 @@ def clean_ring(pts: np.ndarray, eps: float, min_edge: float, drop_len: float | N
     return clean if len(clean) >= 3 else []
 
 
-def _ring_or_fallback(c, eps, min_edge, drop, short=0.0):
-    r = clean_ring(c, eps, min_edge, drop, short)
+def _ring_or_fallback(c, eps, min_edge, drop, short=0.0, jog=0.0):
+    r = clean_ring(c, eps, min_edge, drop, short, jog)
     if r and abs(_area(r)) > 0.5 * abs(cv2.contourArea(c.astype(np.float32))):
         return r
     approx = cv2.approxPolyDP(c.astype(np.float32).reshape(-1, 1, 2), eps, True).reshape(-1, 2)
@@ -391,16 +416,30 @@ def wall_rings(material: np.ndarray, sw: float, t: float):
     for i, c in enumerate(contours):
         if hier[i][3] != -1:
             continue
-        outer = _ring_or_fallback(c.reshape(-1, 2) + 0.5, eps, min_edge, drop, 0.8 * t)
+        outer = _ring_or_fallback(c.reshape(-1, 2) + 0.5, eps, min_edge, drop, 0.8 * t, 0.07 * t)
         if not outer:
             continue
         rings = [outer]
         ch = hier[i][2]
         while ch != -1:
             if cv2.contourArea(contours[ch]) > 0.8 * t * t:
-                r = _ring_or_fallback(contours[ch].reshape(-1, 2) + 0.5, eps, min_edge, drop, 0.8 * t)
+                r = _ring_or_fallback(contours[ch].reshape(-1, 2) + 0.5, eps, min_edge, drop, 0.8 * t, 0.07 * t)
                 if r:
                     rings.append(r)
             ch = hier[ch][0]
         regions.append(rings)
     return regions
+
+
+def wobbly(regions, t: float) -> float:
+    """Unruhe der Umrisse: Ecken je Wandstärke Umfang. Saubere Pläne haben lange gerade Kanten
+    (wenige Ecken, auch mit Leibungen), freihändige Skizzen viele kleine Knicke und Stufen."""
+    n = 0
+    tot = 0.0
+    for rings in regions:
+        for r in rings:
+            n += len(r)
+            for i in range(len(r)):
+                (x0, y0), (x1, y1) = r[i - 1], r[i]
+                tot += math.hypot(x1 - x0, y1 - y0)
+    return n * t / tot if tot else 0.0

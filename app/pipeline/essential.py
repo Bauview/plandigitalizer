@@ -620,6 +620,7 @@ def opening_entities(sp: SemanticPlan, binary: np.ndarray) -> list:
     sw = getattr(sp, "stroke_px", 2.0)
     g = int(max(1, round(sw / 2 + 1)))
     wall_cut = cv2.dilate(sp.walls, np.ones((2 * g + 1, 2 * g + 1), np.uint8)) > 0
+    sym_ink = (ink > 0) & ~wall_cut
     for o in sp.openings:
         if o.kind == "window":
             got = _window_from_ink(o, ink, wall_cut, t, outside)
@@ -627,11 +628,16 @@ def opening_entities(sp: SemanticPlan, binary: np.ndarray) -> list:
         else:
             if not o.swing:
                 o.swing = _door_swing(o, tol_ink)
-            for hx, hy, ldx, ldy, r, jdx, jdy in o.swing:
+            for swing in o.swing:
+                hx, hy, ldx, ldy, r, jdx, jdy = swing
+                (hx, hy, r), (q0, q1) = _refine_door(swing, sym_ink)
                 tip = (hx + ldx * r, hy + ldy * r)
-                lt = max(1.5, 0.045 * r)                     # Türblatt ca. 4 cm
-                nx, ny = jdx * lt, jdy * lt                  # zur Öffnung hin
-                ents.append(Polyline([(hx, hy), tip, (tip[0] + nx, tip[1] + ny), (hx + nx, hy + ny)], True, "DOORS"))
+                # Türblatt wie gezeichnet (Lage/Dicke quer zur Blattrichtung), sonst ca. 4 cm
+                if q1 - q0 < 1.0:
+                    q0, q1 = 0.0, max(1.5, 0.045 * r)
+                ents.append(Polyline([(hx + jdx * q0, hy + jdy * q0), (tip[0] + jdx * q0, tip[1] + jdy * q0),
+                                      (tip[0] + jdx * q1, tip[1] + jdy * q1), (hx + jdx * q1, hy + jdy * q1)],
+                                     True, "DOORS"))
                 a_leaf = math.degrees(math.atan2(ldy, ldx)) % 360
                 a_j = math.degrees(math.atan2(jdy, jdx)) % 360
                 if (a_j - a_leaf) % 360 <= 180:
@@ -639,6 +645,49 @@ def opening_entities(sp: SemanticPlan, binary: np.ndarray) -> list:
                 else:
                     ents.append(Arc((hx, hy), r, a_j, a_j + ((a_leaf - a_j) % 360), "DOORS"))
     return ents
+
+
+def _refine_door(swing, ink: np.ndarray):
+    """Drehpunkt und Radius aus dem gezeichneten Bogen (Kreisausgleich), Türblatt-Lage aus der Tinte.
+
+    Gibt ((hx, hy, r), (q0, q1)) zurück; q0..q1 = Lage des Blattes quer zur Blattrichtung (zur Öffnung hin
+    positiv), (0, 0) wenn nicht messbar."""
+    hx, hy, dx, dy, r, jx, jy = swing
+    H, W = ink.shape
+    R = int(1.25 * r) + 2
+    x0, x1, y0, y1 = max(0, int(hx) - R), min(W, int(hx) + R), max(0, int(hy) - R), min(H, int(hy) + R)
+    ys, xs = np.nonzero(ink[y0:y1, x0:x1])
+    if xs.size < 10:
+        return (hx, hy, r), (0.0, 0.0)
+    px, py = xs + x0 + 0.5 - hx, ys + y0 + 0.5 - hy
+    u = px * dx + py * dy                     # Blattrichtung
+    v = px * jx + py * jy                     # Richtung Leibung
+    rho = np.hypot(u, v)
+    ang = np.degrees(np.arctan2(v, u))
+    sel = (ang > 18) & (ang < 72) & (np.abs(rho - r) < 0.15 * r)
+    out = (hx, hy, r)
+    if np.count_nonzero(sel) >= 12:
+        X, Y = px[sel] + hx, py[sel] + hy
+        A = np.c_[2 * X, 2 * Y, np.ones_like(X)]
+        b = X * X + Y * Y
+        try:
+            (cx, cy, c), *_ = np.linalg.lstsq(A, b, rcond=None)
+            rr = math.sqrt(max(1e-6, c + cx * cx + cy * cy))
+            res = np.abs(np.hypot(X - cx, Y - cy) - rr)
+            if math.hypot(cx - hx, cy - hy) < 0.12 * r and abs(rr - r) < 0.12 * r and np.median(res) < 0.03 * r + 1:
+                out = (float(cx), float(cy), float(rr))
+        except np.linalg.LinAlgError:
+            pass
+    # Türblatt: Tinte entlang der Blattrichtung (20–85 % der Länge), quer dazu nahe am Drehpunkt
+    blade = (u > 0.2 * r) & (u < 0.85 * r) & (np.abs(v) < 0.12 * r)
+    if np.count_nonzero(blade) < 6:
+        return out, (0.0, 0.0)
+    vv = v[blade]
+    lo, hi = np.percentile(vv, 3), np.percentile(vv, 97)
+    if hi - lo > 0.1 * r:
+        return out, (0.0, 0.0)
+    # Achse = Mitte der Strichränder; Strichbreite der Linien bleibt aussen vor
+    return out, (float(lo), float(hi))
 
 
 def _line_positions(prof: np.ndarray, thr: float = 0.6) -> list[float]:

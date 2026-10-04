@@ -196,7 +196,56 @@ def _mark_dimensions(lines, texts, text_h) -> list[float]:
             dist = min(right) - max(left)
             if dist > 3 * th:
                 cands.append(val / dist)
+    _extend_dimensions(lines, text_h)
     return cands
+
+
+def _extend_dimensions(lines, text_h) -> None:
+    """Massketten vervollständigen: Stücke auf derselben Masslinie (auch ohne lesbare Masszahl) und
+    ihre Begrenzungsstriche gehören ebenfalls zur Bemassung."""
+    tol = max(2.0, 0.25 * text_h)
+    for _ in range(3):
+        dims = [l for l in lines if l.layer == "DIMENSIONS" and (l.is_h or l.is_v) and l.length > 1.5 * text_h]
+        if not dims:
+            return
+        changed = False
+        for l in lines:
+            if l.layer != "LINES" or not (l.is_h or l.is_v):
+                continue
+            for d in dims:
+                if d.is_h and l.is_h and abs(l.p1[1] - d.p1[1]) <= tol:
+                    a0, a1 = sorted((l.p1[0], l.p2[0]))
+                    b0, b1 = sorted((d.p1[0], d.p2[0]))
+                elif d.is_v and l.is_v and abs(l.p1[0] - d.p1[0]) <= tol:
+                    a0, a1 = sorted((l.p1[1], l.p2[1]))
+                    b0, b1 = sorted((d.p1[1], d.p2[1]))
+                else:
+                    continue
+                if a0 <= b1 + 2 * text_h and b0 <= a1 + 2 * text_h:      # anschliessend oder überlappend
+                    l.layer = "DIMENSIONS"
+                    changed = True
+                    break
+        # Begrenzungen (kurze Querstriche, Schrägstriche) auf den Masslinien
+        for l in lines:
+            if l.layer != "LINES" or l.length > 6 * text_h:
+                continue
+            for d in dims:
+                if d.is_h:
+                    ys = sorted((l.p1[1], l.p2[1]))
+                    xs = sorted((d.p1[0], d.p2[0]))
+                    hit = ys[0] - tol <= d.p1[1] <= ys[1] + tol and xs[0] - tol <= l.mid[0] <= xs[1] + tol \
+                        and abs(l.p2[1] - l.p1[1]) > 0.3 * l.length
+                else:
+                    xs = sorted((l.p1[0], l.p2[0]))
+                    ys = sorted((d.p1[1], d.p2[1]))
+                    hit = xs[0] - tol <= d.p1[0] <= xs[1] + tol and ys[0] - tol <= l.mid[1] <= ys[1] + tol \
+                        and abs(l.p2[0] - l.p1[0]) > 0.3 * l.length
+                if hit:
+                    l.layer = "DIMENSIONS"
+                    changed = True
+                    break
+        if not changed:
+            return
 
 
 def _mark_wall_pairs(lines, dmin, dmax, lmin, tol):

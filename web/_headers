@@ -1,0 +1,14 @@
+# Sicherheits-Header für Cloudflare Pages (gelten auch beim lokalen Start mit tools/serve.py).
+# connect-src 'self': Der Browser darf mit KEINEM fremden Server sprechen – Pläne können die Seite nicht verlassen.
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval' 'sha256-bmbJfI7Moz2i92ETDVeaCHqHQgW/7BF6O/vSXdeLFF0='; worker-src 'self' blob:; connect-src 'self' blob: data:; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'none'
+  X-Robots-Tag: noindex, nofollow
+  Referrer-Policy: no-referrer
+  X-Content-Type-Options: nosniff
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), interest-cohort=()
+
+/pyodide/*
+  Cache-Control: public, max-age=2592000
+
+/vendor/*
+  Cache-Control: public, max-age=2592000

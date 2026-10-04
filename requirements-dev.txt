@@ -1,0 +1,10 @@
+# Nur für Tests und Weiterentwicklung auf dem eigenen Rechner.
+# Die Website selbst braucht nichts davon – sie läuft komplett im Browser.
+opencv-python-headless>=4.9
+numpy>=1.26
+pillow>=10.2
+pymupdf>=1.24
+ezdxf>=1.2
+pytesseract>=0.3.10     # Texterkennung in den Tests (Tesseract muss installiert sein)
+ifcopenshell>=0.8       # nur zur Prüfung der erzeugten IFC-Dateien
+pytest>=8.0

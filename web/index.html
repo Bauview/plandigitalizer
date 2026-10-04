@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="de" data-version="f4cd711ba8">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PlanDigitalizer</title>
+  <meta name="robots" content="noindex, nofollow">
+  <!-- Schutz auch ohne Server-Header (z.B. GitHub Pages): keine Verbindungen zu fremden Servern -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval' 'sha256-bmbJfI7Moz2i92ETDVeaCHqHQgW/7BF6O/vSXdeLFF0='; worker-src 'self' blob:; connect-src 'self' blob: data:; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='3' width='26' height='26' rx='3' fill='none' stroke='%232952cc' stroke-width='3'/%3E%3Cpath d='M3 16h13V3' fill='none' stroke='%232952cc' stroke-width='3'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+  <script type="importmap">{"imports": {"three": "./vendor/three.module.min.js"}}</script>
+</head>
+<body>
+  <header class="top">
+    <div class="wrap top-inner">
+      <a class="brand" href="./" aria-label="PlanDigitalizer – Startseite">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect x="3" y="3" width="26" height="26" rx="3"/><path d="M3 16h13V3"/></svg>
+        PlanDigitalizer
+      </a>
+      <span class="local-badge" title="Pläne werden ausschliesslich in diesem Browser verarbeitet und nicht hochgeladen.">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5 2.5 3.6v4.1c0 3.3 2.3 5.9 5.5 6.8 3.2-.9 5.5-3.5 5.5-6.8V3.6z"/></svg>
+        Verarbeitung im Browser
+      </span>
+    </div>
+  </header>
+
+  <main class="wrap" id="app" data-view="upload">
+
+    <!-- 1 · Upload -->
+    <section class="view view-upload" aria-labelledby="h-upload">
+      <div class="intro">
+        <h1 id="h-upload">PlanDigitalizer</h1>
+        <p class="lead">Alte Pläne schnell digitalisieren.</p>
+      </div>
+      <label class="drop" id="drop" for="file">
+        <input type="file" id="file" accept=".jpg,.jpeg,.png,.webp,.pdf,.tif,.tiff,image/*,application/pdf" hidden>
+        <svg class="drop-icon" viewBox="0 0 48 48" aria-hidden="true">
+          <path d="M12 6h17l9 9v27H12z"/><path d="M29 6v9h9"/><path d="M18 28h14M18 34h9M25 22v-0"/>
+        </svg>
+        <span class="drop-title">Plan hier ablegen</span>
+        <span class="drop-sub">Foto, Scan oder PDF</span>
+        <span class="btn btn-secondary drop-btn">oder Datei auswählen</span>
+        <span class="drop-formats">JPG · PNG · WEBP · PDF</span>
+        <span class="drop-busy" aria-live="polite"><span class="spinner"></span> Datei wird geöffnet …</span>
+      </label>
+      <div class="engine-load" id="engineLoad" role="status" aria-live="polite">
+        <span class="engine-bar"><span></span></span>
+        <span class="engine-text" id="engineText">Werkzeuge werden geladen … (beim ersten Besuch ca. 60 MB, danach aus dem Zwischenspeicher)</span>
+      </div>
+    </section>
+
+    <!-- 2 · Vorschau -->
+    <section class="view view-preview" aria-labelledby="h-preview">
+      <div class="bar">
+        <div>
+          <h2 id="h-preview" class="file-name"></h2>
+          <p class="muted file-meta"></p>
+        </div>
+        <button class="link" data-action="reset">Andere Datei</button>
+      </div>
+      <div class="preview-box">
+        <div class="preview-stage" id="previewStage">
+          <img id="previewImg" alt="Vorschau des hochgeladenen Plans">
+          <canvas id="calibCanvas" aria-hidden="true"></canvas>
+        </div>
+      </div>
+
+      <details class="calib" id="calib">
+        <summary>Massstab festlegen <span class="muted">(optional)</span></summary>
+        <div class="calib-body">
+          <label class="field">
+            <span>Bekannte Länge</span>
+            <span class="input-unit"><input id="calibLen" type="text" inputmode="decimal" placeholder="4.50"><span>m</span></span>
+          </label>
+          <p class="calib-help" id="calibHelp">Klicken Sie im Plan auf den Anfang und das Ende einer Strecke mit bekannter Länge.</p>
+          <button class="link" id="calibReset" type="button">Punkte zurücksetzen</button>
+        </div>
+      </details>
+
+      <details class="calib" id="set3d">
+        <summary>3D und IFC <span class="muted">(Einstellungen, optional)</span></summary>
+        <div class="set3d-body">
+          <div class="set-row">
+            <label class="field" for="s3WallH"><span>Wandhöhe</span>
+              <span class="input-unit"><input id="s3WallH" type="text" inputmode="decimal" value="2.60"><span>m</span></span></label>
+            <label class="check" for="s3Auto"><input type="checkbox" id="s3Auto" checked> Wandstärke automatisch erkennen</label>
+            <label class="field" for="s3Thick"><span>Standard-Wandstärke</span>
+              <span class="input-unit"><input id="s3Thick" type="text" inputmode="decimal" value="0.20" disabled><span>m</span></span></label>
+          </div>
+          <p class="set-sub">Standardwerte, wenn im Plan keine Masse erkennbar sind. Sie werden im Modell als Annahme gekennzeichnet.</p>
+          <div class="set-row">
+            <label class="field" for="s3DoorH"><span>Türhöhe</span>
+              <span class="input-unit"><input id="s3DoorH" type="text" inputmode="decimal" value="2.00"><span>m</span></span></label>
+            <label class="field" for="s3WinH"><span>Fensterhöhe</span>
+              <span class="input-unit"><input id="s3WinH" type="text" inputmode="decimal" value="1.20"><span>m</span></span></label>
+            <label class="field" for="s3Sill"><span>Brüstung</span>
+              <span class="input-unit"><input id="s3Sill" type="text" inputmode="decimal" value="0.90"><span>m</span></span></label>
+          </div>
+          <div class="storeys">
+            <div class="storeys-head">
+              <span class="set-label">Geschosse <span class="muted">(von unten nach oben)</span></span>
+              <button class="link" type="button" id="s3AddStorey">+ Geschoss</button>
+            </div>
+            <table class="storey-table">
+              <thead><tr><th scope="col">Geschoss</th><th scope="col">Geschosshöhe</th><th><span class="sr-only">Entfernen</span></th></tr></thead>
+              <tbody id="s3Storeys"></tbody>
+            </table>
+            <label class="field" for="s3PlanStorey"><span>Dieser Plan zeigt</span>
+              <select id="s3PlanStorey"></select></label>
+          </div>
+        </div>
+      </details>
+
+      <div class="actions">
+        <button class="btn btn-primary btn-lg" data-action="process">Plan vektorisieren</button>
+      </div>
+    </section>
+
+    <!-- 3 · Verarbeitung -->
+    <section class="view view-processing" aria-labelledby="h-proc">
+      <div class="card proc">
+        <h2 id="h-proc" class="sr-only">Verarbeitung</h2>
+        <ol class="steps" id="steps" aria-live="polite"></ol>
+        <p class="muted small">Die Verarbeitung erfolgt lokal. Je nach Plangrösse dauert sie einige Sekunden.</p>
+      </div>
+    </section>
+
+    <!-- 4 · Ergebnis -->
+    <section class="view view-result" aria-labelledby="h-result">
+      <div class="bar">
+        <h2 id="h-result" class="done-title">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="9"/><path d="m6 10.2 2.7 2.7L14.2 7"/></svg>
+          Vektorisierung abgeschlossen
+        </h2>
+        <div class="seg" role="tablist" aria-label="Ansicht">
+          <button role="tab" data-mode="original">Original</button>
+          <button role="tab" data-mode="vector">Vektor</button>
+          <button role="tab" data-mode="split" class="seg-split">Nebeneinander</button>
+          <button role="tab" data-mode="3d">3D</button>
+        </div>
+      </div>
+
+      <ul class="notices" id="notices"></ul>
+
+      <div class="viewer" id="viewer" data-mode="split">
+        <div class="pane pane-original"><div class="layer"><img id="resOriginal" alt="Original (bereinigt)"></div><span class="pane-label">Original</span></div>
+        <div class="pane pane-vector"><div class="layer" id="resVector"></div><span class="pane-label">Vektor</span></div>
+        <div class="pane pane-3d">
+          <div class="view3d" id="view3d"></div>
+          <span class="pane-label">3D-Modell</span>
+          <p class="pane-hint">Drehen: ziehen · Verschieben: rechte Maustaste · Zoom: Mausrad</p>
+          <div class="no3d" id="no3d" hidden></div>
+        </div>
+        <div class="zoom-tools">
+          <button data-zoom="in" aria-label="Vergrössern">+</button>
+          <button data-zoom="out" aria-label="Verkleinern">−</button>
+          <button data-zoom="fit" aria-label="Einpassen">⤢</button>
+        </div>
+      </div>
+
+      <div class="meta-row">
+        <p class="muted small" id="summary"></p>
+        <label class="toggle small"><input type="checkbox" id="colorLayers"> Layer farbig anzeigen</label>
+      </div>
+
+      <details class="bim-panel" id="bimPanel">
+        <summary><span class="bim-title">BIM-Modell</span> <span class="muted" id="bimLine"></span></summary>
+        <div class="bim-body">
+          <div class="bim-col"><h3>Räume</h3><ul id="bimSpaces"></ul></div>
+          <div class="bim-col"><h3>Annahmen</h3><ul id="bimAssumptions"></ul></div>
+          <div class="bim-col"><h3>Nicht erzeugt</h3><ul id="bimNot"></ul></div>
+        </div>
+      </details>
+
+      <div class="downloads">
+        <a class="btn btn-primary btn-lg" id="dlPdf" download>
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v10m-4-4 4 4 4-4M4 16h12"/></svg>
+          PDF herunterladen
+        </a>
+        <a class="btn btn-dark btn-lg" id="dlCad" download>
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v10m-4-4 4 4 4-4M4 16h12"/></svg>
+          <span id="dlCadLabel">DXF herunterladen</span>
+        </a>
+        <a class="btn btn-outline btn-lg" id="dlIfc" download>
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v10m-4-4 4 4 4-4M4 16h12"/></svg>
+          IFC herunterladen
+        </a>
+        <div class="dl-split">
+          <a class="btn btn-outline btn-lg" id="dlGlb" download>
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v10m-4-4 4 4 4-4M4 16h12"/></svg>
+            3D-Modell herunterladen
+          </a>
+          <a class="dl-alt" id="dlObj" download title="Alternative für ältere Programme und die macOS-Vorschau">als OBJ</a>
+        </div>
+      </div>
+      <p class="muted small cad-hint" id="bimHint"></p>
+      <p class="muted small cad-hint" id="cadHint"></p>
+
+      <div class="actions center">
+        <button class="link" data-action="reset">Neuen Plan digitalisieren</button>
+      </div>
+    </section>
+
+    <!-- 5 · Fehler -->
+    <section class="view view-error" aria-labelledby="h-error">
+      <div class="card error-card" role="alert">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 7v6M12 16.5v.5"/></svg>
+        <h2 id="h-error" class="error-title">Die Datei konnte nicht verarbeitet werden.</h2>
+        <p class="error-detail" id="errorDetail"></p>
+        <button class="btn btn-secondary" data-action="reset">Andere Datei wählen</button>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot wrap muted small">
+    Ihre Pläne verlassen dieses Gerät nicht: Die gesamte Verarbeitung läuft im Browser, es wird nichts hochgeladen oder gespeichert.
+  </footer>
+  <script src="vendor/tesseract/tesseract.min.js"></script>
+  <script src="engine.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

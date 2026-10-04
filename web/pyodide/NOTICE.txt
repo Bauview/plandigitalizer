@@ -1,0 +1,4 @@
+Pyodide 0.28.3 (MPL-2.0) – https://pyodide.org
+Enthaltene Pakete: numpy (BSD), opencv-python (Apache-2.0), pymupdf (AGPL-3.0),
+pillow (HPND), fonttools (MIT), pyparsing (MIT), typing_extensions (PSF), ezdxf (MIT).
+Die Dateien sind unverändert aus der offiziellen Pyodide-Distribution bzw. von PyPI übernommen.

@@ -28,6 +28,7 @@ STAGES = [
 ]
 
 _ALPHA = __import__("re").compile(r"[A-Za-zÄÖÜäöüéèàç]{2,}")
+_WORD = __import__("re").compile(r"[A-Za-zÄÖÜäöüéèàç]{3,}")
 _TITLE = __import__("re").compile(r"grundriss|geschoss|\b(EG|OG|UG|DG|\d\.\s?OG)\b|bestand|wohnung", __import__("re").I)
 _SCALE_TXT = __import__("re").compile(r"\b(m|mst\.?|massstab)?\s*1\s*:\s*\d{2,4}\b", __import__("re").I)
 
@@ -241,6 +242,9 @@ def stage_finish(st: Stage1, texts: list, ocr_ok: bool, calibration: dict | None
                 continue
             if essential_only and _SCALE_TXT.search(t.text):
                 continue
+            if essential_only and not (_WORD.search(t.text) and t.conf >= 55):
+                if not ("m2" in t.text or "m²" in t.text):
+                    continue                            # Fragmente (z.B. aus Möbelsymbolen) weglassen
             if essential_only:
                 if t.layer == "DIMENSIONS" or not _ALPHA.search(t.text):
                     if not ("m2" in t.text or "m²" in t.text) or not inside(t.center):

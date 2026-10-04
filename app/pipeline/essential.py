@@ -743,6 +743,13 @@ _AREA_RE = re.compile(r"(?:F\s*[=:]\s*)?(\d{1,3}(?:[.,]\d{1,2})?)\s*(?:m\s*[2²]
 _LETTERS = re.compile(r"[A-Za-zÄÖÜäöüéèàç]{2,}")
 
 
+def _is_name(q) -> bool:
+    """Raumname: echtes Wort (≥ 3 Buchstaben, überwiegend Buchstaben, sicher gelesen)."""
+    t = q.text.strip()
+    letters = sum(c.isalpha() for c in t)
+    return bool(re.search(r"[A-Za-zÄÖÜäöüéèàç]{3,}", t)) and letters >= 0.6 * len(t.replace(" ", "")) and q.conf >= 55
+
+
 @dataclass
 class Room:
     label: int
@@ -804,7 +811,7 @@ def room_stamps(sp: SemanticPlan, texts: list, mm_per_px: float | None):
         txs = sorted(by_room.get(rm.label, []), key=lambda q: q.box[1])
         if not txs:
             continue
-        names = [q for q in txs if _LETTERS.search(q.text) and not _AREA_RE.search(q.text)]
+        names = [q for q in txs if _is_name(q) and not _AREA_RE.search(q.text)]
         areas = [q for q in txs if _AREA_RE.search(q.text)]
         if not names and not areas:
             continue

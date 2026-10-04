@@ -74,10 +74,15 @@ def stage_prepare(path: Path, progress: Callable[[int], None] = lambda i: None, 
                 if pc is None:
                     break
                 H, size, conv = pc
-                first = first or conv
+                prev = (prep, seg, band)
                 prep = warp_prepared(prep, H, size)
                 seg = semantic.segment(prep.gray, seg.scale)
                 band = semantic.confident_band(seg)
+                ang, clar = semantic.dominant_angle(band)
+                if clar < 0.3 or abs(ang) > 2.0:        # Entzerrung unplausibel -> verwerfen
+                    prep, seg, band = prev
+                    break
+                first = first or conv
             if first:
                 warnings.append(f"Perspektive entzerrt (Wandlinien liefen um {first:.1f}° zusammen).")
         # Ausrichtung aus den erkannten Wänden (unabhängig von Möbeln, Texten, Schraffuren);

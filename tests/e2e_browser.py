@@ -52,6 +52,7 @@ async def main(files: list[str]) -> int:
                 await pg.click(".view-error [data-action=reset]")
                 continue
             print("fertig", Path(f).name, round(time.time() - t, 1), "s")
+            await pg.wait_for_timeout(2500)          # 3D-Dateien entstehen kurz nach dem Ergebnis
             for dl in ["dlPdf", "dlCad", "dlIfc", "dlGlb", "dlObj"]:
                 href = await pg.get_attribute("#" + dl, "href")
                 fn = await pg.get_attribute("#" + dl, "download")

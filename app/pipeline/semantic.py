@@ -169,7 +169,15 @@ def confident_band(seg: "Segmentation", thr: float = 0.65) -> np.ndarray:
     """Nur sicher erkannte Wand-/Öffnungspixel (für Ausrichtung und Perspektive)."""
     p = seg.probs[:, :, 1].astype(np.uint16) + seg.probs[:, :, 2] + seg.probs[:, :, 3]
     m = ((p >= thr * 255) * 255).astype(np.uint8)
-    return cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    # nur Teile des Gebäudes: kleine, verstreute Fragmente (Schmutz, Text) verwerfen
+    n, lab, st, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
+    if n > 2:
+        amax = float(st[1:, cv2.CC_STAT_AREA].max())
+        keep = np.zeros(n, np.uint8)
+        keep[1:] = np.where(st[1:, cv2.CC_STAT_AREA] >= 0.05 * amax, 255, 0)
+        m = keep[lab]
+    return m
 
 
 def dominant_angle(mask: np.ndarray) -> tuple[float, float]:
@@ -212,7 +220,7 @@ def dominant_angle(mask: np.ndarray) -> tuple[float, float]:
 def _line_families(band: np.ndarray, t: float):
     """Wandkanten als Liniensegmente, gruppiert in zwei (ungefähr) rechtwinklige Richtungen."""
     edges = cv2.Canny(band, 50, 150)
-    min_len = int(max(20, 5 * t))
+    min_len = int(max(20, 3.5 * t))
     segs = cv2.HoughLinesP(edges, 1, np.pi / 720, threshold=int(max(15, 2 * t)),
                            minLineLength=min_len, maxLineGap=int(max(3, 0.8 * t)))
     if segs is None:
@@ -255,7 +263,7 @@ def perspective_correction(band: np.ndarray, t: float):
     Plans gerade richtet. ``None``, wenn keine nennenswerte Perspektive vorliegt."""
     h, w = band.shape
     fams = _line_families(band, t)
-    if fams is None or any(len(f[0]) < 4 for f in fams):
+    if fams is None or any(len(f[0]) < 3 for f in fams):
         return None
     s = 2.0 / max(h, w)
     N = np.array([[s, 0, -w * s / 2], [0, s, -h * s / 2], [0, 0, 1.0]])

@@ -29,18 +29,19 @@ Die gesamte Verarbeitung läuft **im Browser**. Pläne werden nicht hochgeladen,
 | **Eingabe** | JPG, PNG, WEBP, TIFF, PDF (erste Seite) – Scan, Handyfoto, Handskizze |
 | **Ausrichtung** | Schräglage bis ±45° aus den erkannten Wänden · Perspektive entzerrt (Blatt auf Tisch *oder* schräg fotografiert ohne sichtbaren Blattrand) · Blaupausen/Negative |
 | **Bildkorrektur** | Schatten/Hintergrund, Kontrast, Rauschen, Schwarz-Weiss, Lückenschluss |
-| **Erkennung** | Wände, Fenster, Türen pro Pixel durch ein lokal laufendes neuronales Netz; Möbel, Massketten, Schraffuren, Texte werden als „nicht wesentlich“ erkannt |
-| **Geometrie** | Wände als exakte, achsparallele Umrisse (Kanten auf die gezeichnete Linie eingerastet), Ecken und T-Stösse geschlossen; Öffnungen sauber eingeschnitten |
-| **Fenster** | Rahmen-, Glas- und Leibungslinien so, wie sie im Plan gezeichnet sind (aus dem Bild gelesen); gezeichnete Fensterbank aussen; sonst Standardsymbol |
-| **Türen** | Türblatt + Anschlagbogen, Drehpunkt und Aufschlagseite aus dem gezeichneten Bogen; Doppeltüren; ohne erkennbaren Bogen nur die Öffnung |
-| **Raumstempel** | Raumname + Fläche aus der Texterkennung; die Fläche wird nur übernommen, wenn sie zur gemessenen Raumfläche passt (±8 %) |
+| **Erkennung** | Wände, Fenster, Türen pro Pixel durch ein lokal laufendes neuronales Netz; dünne Leichtbauwände zusätzlich aus gezeichneten Doppellinien; Möbel, Schraffuren, Fremdtexte werden verworfen |
+| **Geometrie** | Wände **1:1 aus der Zeichnung nachgezogen** (Strichmitte): schräge Fensterleibungen, Anschläge, Nischen, Vorsprünge, schräge Wände; Kanten auf 0/45/90° eingerastet, freie Winkel bleiben; Abweichung auf Testplänen im Mittel 4–6 mm |
+| **Fenster** | Rahmen-, Glas- und Bankkanten mit ihrer gezeichneten Lage und Länge aus dem Bild übernommen (Möbel innen werden nicht mitgenommen); nur wenn nichts lesbar ist, Standardsymbol |
+| **Türen** | Türblatt + Anschlagbogen: Drehpunkt und Radius per Kreisausgleich aus dem gezeichneten Bogen, Blattlage aus der Zeichnung; Doppeltüren; ohne erkennbaren Bogen nur die Öffnung |
+| **Raumstempel** | alle lesbaren Zeilen (Nummer, Name, Fläche, Bodenbelag) in Originalreihenfolge, mit Stempelrahmen wenn gezeichnet; Fläche wird gegen die gemessene Raumfläche geprüft (Hinweis bei Abweichung, typische Lesefehler wie «235.5» statt «25.5» werden korrigiert) |
 | **Planausgabe** | PDF als Bestandesplan: massstäblich auf A3 (1:50 / 1:100 / 1:200 …) mit Massstabsleiste, Wände grau angelegt, Plankopf |
-| **Optional** | „Auch Möblierung, Bemassung und übrige Linien übernehmen“ – dann zusätzlich alle restlichen Linien, Bögen, Kreise, Bemassung |
+| **Bemassung** | Massketten ausserhalb des Gebäudes mit Masslinien, Hilfslinien, Begrenzungsstrichen und Masszahlen (Layer `DIMENSIONS`) |
+| **Optional** | „Auch Möblierung und übrige Linien übernehmen“ – dann zusätzlich alle restlichen Linien, Bögen, Kreise |
 | **Texterkennung** | Deutsch + Englisch, auch senkrechte Masszahlen → editierbarer CAD-Text |
 | **Massstab** | Kalibrierung (zwei Punkte + bekannte Länge) · automatisch aus Massketten · „M 1:100" + Papiergrösse |
 | **Ausgabe** | Vektor-PDF (ein-/ausblendbare Ebenen) · DXF (Layer, mm) · IFC4 · 3D als GLB und OBJ |
 
-**CAD-Layer:** `WALLS` (Wandumrisse), `HATCH` (Wandfüllung), `DOORS`, `WINDOWS`, `STAIRS`, `TEXT` (Raumnamen) – mit der Option zusätzlich `DIMENSIONS`, `LINES`, `SYMBOLS`
+**CAD-Layer:** `WALLS` (Wandumrisse), `HATCH` (Wandfüllung), `DOORS`, `WINDOWS`, `STAIRS`, `ROOMS` (Raumstempel + Rahmen), `DIMENSIONS`, `TEXT` – mit der Option zusätzlich `LINES`, `SYMBOLS`
 
 **DWG:** Echtes DWG lässt sich im Browser nicht erzeugen (das Format ist proprietär; der kostenlose ODA-Konverter ist ein Desktop-Programm). Die DXF öffnet sich in jedem CAD und lässt sich dort als DWG speichern.
 
@@ -55,17 +56,18 @@ Bestandespläne enthalten viel, das für die Weiterbearbeitung stört: Möblieru
 | Übernommen | Verworfen |
 |---|---|
 | Wände (Lage, Stärke, Ecken, T-Stösse) | Möbel, Küche, Sanitärapparate |
-| Fenster und Türen (Breite, Lage, Anschlag) | Massketten, Masszahlen, Höhenkoten |
+| Fenster und Türen (Breite, Lage, Anschlag, Rahmen, Bank) | Möbel-/Bodenraster, Höhenkoten |
+| Massketten (aussen) | Achsraster, Nordpfeil, Planrahmen |
 | Treppen | Boden- und Wandschraffuren |
-| Raumnamen und Flächenangaben | Achsraster, Nordpfeil, Planrahmen, Plankopf |
+| Raumstempel (Nr., Name, Fläche, Belag) | Plankopf (wird als Plantitel übernommen) |
 
 **So funktioniert es**
 
 1. **Pixel-Erkennung:** Ein kleines neuronales Netz (U-Net, 0.6 Mio. Parameter, 2.3 MB) ordnet jedem Bildpunkt *Wand*, *Fenster*, *Tür* oder *anderes* zu. Es läuft lokal im Browser über OpenCV – keine Cloud. Die Rechengrösse passt sich automatisch der Wandstärke im Bild an.
 2. **Ausrichtung:** Aus den Kanten der erkannten Wände (nicht aus Möbeln oder Text) werden Schräglage (bis ±45°) und – bei schräg fotografierten Plänen – die Fluchtpunkte bestimmt. Der Plan wird entzerrt, gerade gedreht und neu erkannt.
-3. **Rekonstruktion:** Die Wandfläche wird in achsparallele Wandabschnitte zerlegt; jede Wandkante wird auf die tatsächlich gezeichnete Linie eingerastet. Öffnungen werden auf die Wandstärke ausgerichtet und sauber ausgeschnitten.
-4. **Symbole:** Fenster erhalten Leibungs- und Glaslinien, Türen Blatt und Anschlagbogen. Drehpunkt und Aufschlagseite werden aus dem im Plan gezeichneten Bogen gelesen; Doppeltüren werden erkannt.
-5. **Raumstempel:** Texte innerhalb eines Raums werden zu einem Stempel zusammengefasst (Name, Fläche). Die Fläche wird gegen die gemessene Raumfläche geprüft – falsche oder falsch gelesene Flächen werden nicht übernommen und als Hinweis gemeldet.
+3. **Rekonstruktion 1:1:** Das Netz sagt, *wo* Wände sind; die Form kommt aus der Tinte. Umriss, Schraffur oder Füllung werden zur Wandfläche geschlossen und als Polygon in Strichmitte nachgezogen – schräge Leibungen, Anschläge und Nischen bleiben erhalten. Leichtbauwände, die nur als Doppellinie gezeichnet sind, werden direkt aus den Linienpaaren erkannt (auch wenn das Netz sie für ein Fenster hält: Fenster liegen in der Gebäudehülle, Innenwände stossen quer an andere Wände). Für das IFC-Modell werden zusätzlich achsparallele Wandabschnitte gebildet.
+4. **Fenster und Türen:** Fensterlinien (Rahmen, Glas, Bank) werden mit ihrer gezeichneten Lage und Länge übernommen. Türbogen werden per Kreisausgleich eingemessen (Drehpunkt, Radius), das Türblatt aus der Zeichnung; Doppeltüren werden erkannt.
+5. **Raumstempel und Masse:** Die Zeilen eines Stempels (Nummer, Name, Fläche, Belag) werden vollständig übernommen, ein gezeichneter Rahmen ebenfalls; Flächen werden gegen die gemessene Raumfläche geprüft (Hinweis bei Abweichung). Massketten ausserhalb des Gebäudes werden samt Hilfslinien, Begrenzungen und Masszahlen übernommen, auch Kettenstücke ohne lesbare Zahl.
 6. **Massstab:** aus Kalibrierung, Massketten oder „M 1:100“ + Papiergrösse; sonst aus den Flächenangaben der Raumstempel (wenn mehrere übereinstimmen). Fehlt alles, wird er aus den Türbreiten **geschätzt** (deutlich als Schätzung markiert).
 
 **Training.** Das Netz wurde mit 7'000 Plänen trainiert, die aus den Geometrien von 17'000 echten Wohnungsgrundrissen (Datensatz *ResPlan*, CC BY 4.0) erzeugt wurden – jeweils in zufälligem Zeichenstil nach Schweizer Gepflogenheiten: Wände schwarz, grau angelegt, als Umriss, mit Mauerwerk- oder Kreuzschraffur, als Handskizze; Türen mit vollem oder gestricheltem Bogen, Doppel- und Schiebetüren; Fenster mit Rahmen, Glas und Fensterbank; dazu Möblierung, Massketten mit Hochzahlen, Raumbeschriftungen, Treppen, Bodenbeläge, Achsraster, Plankopf sowie Alterung (Vergilbung, Bleistift, Flecken, Unschärfe, JPEG, Verzug, Perspektive). Geprüft wird mit Plänen, die das Netz nie gesehen hat, und mit echten Zeichnungen (ROBIN-Datensatz, CAD und Handskizzen).
@@ -139,7 +141,9 @@ Jedes Bauteil trägt den Eigenschaftssatz **`PlanDigitalizer_Herkunft`** („aus
 - Trainiert wurde mit Wohnungsgrundrissen. Sehr ungewöhnliche Darstellungen (z.B. Industriebau, Schnitte, Ansichten) werden schlechter erkannt.
 - Schräge und runde Wände bleiben als Umriss erhalten, gehen aber nicht ins IFC.
 - **Handschrift** wird kaum gelesen; Raumnamen in Handschrift fehlen.
-- Raumstempel brauchen lesbare Schrift: mindestens ca. 20 px Schrifthöhe im Bild (Scan 300 dpi oder scharfes Foto). Bei Bildschirmfotos oder stark verkleinerten Plänen fehlen sie.
+- Raumstempel brauchen lesbare Schrift: mindestens ca. 20 px Schrifthöhe im Bild (Scan 300 dpi oder scharfes Foto). Bei Bildschirmfotos oder stark verkleinerten Plänen fehlen sie. Wird ein Stempel von Möbel- oder Wandlinien durchkreuzt, fehlt oft die betroffene Zeile.
+- Massketten im Gebäudeinneren werden nicht übernommen (zu oft mit Flächenzahlen verwechselt); Masszahlen, die die Texterkennung nicht liest, fehlen – die Masslinie selbst bleibt.
+- Freihandskizzen werden ebenfalls 1:1 nachgezogen; kleine Zitterstufen werden geglättet, echte Krümmungen bleiben.
 - Rechenzeit im Browser: ca. 1–1.5 Minuten pro Plan (das Erkennungsnetz läuft ohne Grafikkarte).
 - Ein um 90° gedrehter Plan (Hochformat ↔ Querformat) bleibt so, wie er fotografiert wurde.
 - Schräg fotografierte Pläne werden entzerrt; das Seitenverhältnis kann dabei um einige Prozent abweichen (geometrisch nicht eindeutig bestimmbar). Für massgenaues Arbeiten einen Scan oder ein möglichst frontales Foto verwenden.
@@ -159,7 +163,8 @@ plandigitalizer/
 │  ├─ pipeline/         Laden → Bildkorrektur → Text → Vektorisierung → Klassifizierung → Massstab
 │  ├─ export/           dxf.py, pdf.py, svg.py
 │  │  ├─ semantic.py    Netz (Wand/Fenster/Tür), Ausrichtung, Perspektive
-│  │  ├─ essential.py   saubere Wände, Öffnungen, Tür-/Fenstersymbole
+│  │  ├─ essential.py   Wände, Öffnungen, Tür-/Fenstersymbole, Raumstempel
+│  │  ├─ trace.py       1:1-Nachzeichnen der Wände aus der Tinte, Leichtbauwände aus Doppellinien
 │  │  └─ walls.py       Wandzerlegung (gemeinsam mit bim/)
 │  ├─ models/           plannet.onnx (Erkennungsmodell)
 │  ├─ bim/              derive.py (Gebäudemodell), ifc_writer.py
@@ -187,6 +192,7 @@ python3 tools/build_web.py               # nach Änderungen an app/
 pip install -r requirements-dev.txt      # einmalig für die Tests
 python3 -m pytest -q                     # Tests (inkl. IFC-Schema-Prüfung)
 python3 tests/make_samples.py            # Beispielpläne erzeugen
+python3 tests/make_bestand.py            # realistische Bestandespläne mit bekannter Geometrie (1:1-Prüfung)
 ```
 
 Die Tests prüfen u.a., dass PDF/DXF echte Vektoren enthalten, der Massstab auf < 2 % stimmt, gedrehte (±23°) und perspektivisch verzerrte Pläne gerade gerichtet werden, Möbel nicht als Wände erscheinen, Wandstärken und Türbreiten stimmen, die IFC-Datei schemakonform ist und `web/py/app.zip` zum aktuellen Code passt.

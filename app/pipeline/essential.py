@@ -63,8 +63,7 @@ def reconstruct(labels: np.ndarray, binary: np.ndarray) -> SemanticPlan | None:
     ink = (binary > 0).astype(np.uint8)
     # dünne, nur als Doppellinie gezeichnete Wände (Leichtbau) ergänzen, die das Netz übersehen hat
     thin = trace.double_line_walls(binary, labels, t)
-    # schraffierte/gefüllte Wände voller Stärke, die das Netz übersehen hat (Umriss + Schraffur dazwischen)
-    thick = trace.double_line_walls(binary, labels, t, gap_f=1.25, wmin_f=0.6, wmax_f=1.5, min_fill=0.12)
+    thick = np.zeros_like(thin)       # (Variante für volle Wandstärke: trace.double_line_walls(..., min_fill>0))
     thin_d = None
     if np.any(thin) or np.any(thick):
         labels = labels.copy()

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 import cv2
+import numpy as np
 
 
 from . import cleanup, essential, semantic
@@ -95,8 +96,8 @@ def stage_prepare(path: Path, progress: Callable[[int], None] = lambda i: None, 
                 break
             total += angle                              # immer vom Ausgangsbild aus drehen (keine Unschärfe)
             prep, (labels, probs) = rotate_prepared(base, total, [base_seg.labels, base_seg.probs])
-            if abs(angle) > 0.6:
-                seg = semantic.segment(prep.gray, base_seg.scale)   # gerade ausgerichtet neu erkennen
+            if abs(angle) > 0.6 and abs(total) > 2.0:
+                seg = semantic.segment(prep.gray, base_seg.scale)   # stark gedreht: neu erkennen
             else:
                 seg = semantic.Segmentation(labels, probs, base_seg.scale, base_seg.wall_px)
             band = semantic.confident_band(seg)
@@ -129,9 +130,17 @@ def stage_finish(st: Stage1, texts: list, ocr_ok: bool, calibration: dict | None
             warnings.append("Die Kalibrierung war unvollständig und wurde ignoriert.")
 
     progress(1)
+    _tk = time.time()
+
+    def _tick(label):
+        nonlocal _tk
+        if semantic.TIMING:
+            print(f"[PD-TIMING]   {label} {time.time() - _tk:.1f}s")
+        _tk = time.time()
     sem = None
     if st.seg is not None:
         sem = essential.reconstruct(st.seg.labels, prep.binary)
+    _tick("reconstruct")
     if sem is not None:
         # Wände/Öffnungen stammen aus der Erkennung; der Rest des Plans wird separat vektorisiert
         grow = int(max(2, round(0.25 * sem.wall_px)))
@@ -143,6 +152,7 @@ def stage_finish(st: Stage1, texts: list, ocr_ok: bool, calibration: dict | None
     normalize_heights(texts, prep.binary)
     vec = vectorize(binary)
     thin = vec.thin_w
+    _tick("vectorize")
 
     progress(2)
     lines = vec.lines
@@ -154,6 +164,7 @@ def stage_finish(st: Stage1, texts: list, ocr_ok: bool, calibration: dict | None
     lines = cleanup.drop_bridges(lines, max_len=8 * thin, tol=max(2.0, 1.2 * thin))
     lines = cleanup.drop_short(lines, max(3.0, 2.0 * thin))
 
+    _tick("cleanup")
     wall_mask = None if sem is not None else vec.wall_mask
     dim_cands = classify(lines, vec.arcs, vec.circles, texts, wall_mask, thin, vec.comp_diag,
                          (h, w), calib_mm_px)
@@ -204,6 +215,7 @@ def stage_finish(st: Stage1, texts: list, ocr_ok: bool, calibration: dict | None
             warnings = [x for x in warnings if x != SCALE_UNKNOWN]
             warnings.append("Massstab nur geschätzt (aus Türbreiten).")
 
+    _tick("classify+scale+stamps")
     # --- Entities sammeln
     if sem is not None:
         drawing.semantic = sem
@@ -215,7 +227,7 @@ def stage_finish(st: Stage1, texts: list, ocr_ok: bool, calibration: dict | None
         inside = lambda p: 0 <= int(p[1]) < h and 0 <= int(p[0]) < w and foot[int(p[1]), int(p[0])] > 0  # noqa: E731
         # Masslinien im Gebäudeinneren sind meist Fehlzuordnungen (Flächenzahlen, Möbel) -> nur aussen
         e_ = int(max(3, sem.wall_px))
-        foot_in = cv2.erode(foot, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * e_ + 1,) * 2))
+        foot_in = cv2.erode(foot, np.ones((2 * e_ + 1, 2 * e_ + 1), np.uint8))
         inside_deep = lambda p: 0 <= int(p[1]) < h and 0 <= int(p[0]) < w and foot_in[int(p[1]), int(p[0])] > 0  # noqa: E731
         for l in lines:
             if l.layer == "STAIRS" and inside(l.mid):
@@ -266,6 +278,7 @@ def stage_finish(st: Stage1, texts: list, ocr_ok: bool, calibration: dict | None
                     if not ("m2" in t.text or "m²" in t.text) or not inside(t.center):
                         continue
             drawing.entities.append(t)
+        _tick("entities")
         n_d = sum(1 for o in sem.openings if o.kind == "door")
         n_w = len(sem.openings) - n_d
         recog = {"walls": len(sem.rects), "doors": n_d, "windows": n_w, "wall_px": round(sem.wall_px, 1)}

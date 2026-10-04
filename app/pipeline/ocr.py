@@ -50,6 +50,21 @@ def _languages() -> str:
     return _lang_cache
 
 
+def _remove_long_lines(gray: np.ndarray) -> np.ndarray:
+    """Lange waagrechte/senkrechte Striche (Möbel, Wände, Stempelrahmen) entfernen, damit Texte, die
+    von Linien berührt oder durchkreuzt werden, lesbar bleiben."""
+    h, w = gray.shape
+    ink = (gray < 140).astype(np.uint8) * 255
+    L = int(max(60, 0.045 * max(h, w)))
+    lines = cv2.bitwise_or(cv2.morphologyEx(ink, cv2.MORPH_OPEN, np.ones((1, L), np.uint8)),
+                           cv2.morphologyEx(ink, cv2.MORPH_OPEN, np.ones((L, 1), np.uint8)))
+    if not np.any(lines):
+        return gray
+    out = gray.copy()
+    out[lines > 0] = 255
+    return out
+
+
 def ocr_images(gray: np.ndarray) -> tuple[list[np.ndarray], float]:
     """Bilder für die Texterkennung: [waagrecht, um 90° gedreht] und Skalierungsfaktor."""
     h, w = gray.shape

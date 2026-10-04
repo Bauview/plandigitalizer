@@ -151,7 +151,7 @@ def wall_material(binary: np.ndarray, walls: np.ndarray, openings: np.ndarray, t
     ink = (binary > 0).astype(np.uint8) * 255
     r = int(max(2, round(0.3 * t)))
     ell = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1,) * 2)
-    rz = int(max(2, round(0.6 * sw)))
+    rz = int(max(1, round(0.45 * sw)))
     zone = cv2.dilate(cv2.bitwise_or(walls, openings), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * rz + 1,) * 2))
     ink_z = cv2.bitwise_and(ink, zone)
     # kleine Lücken in Umrisslinien schliessen (Scan), damit Innenflächen geschlossen sind
@@ -162,15 +162,21 @@ def wall_material(binary: np.ndarray, walls: np.ndarray, openings: np.ndarray, t
     filled = ink_z.copy()
     big = 40.0 * t * t
     wl = walls > 0
+    op = openings > 0
     for i in range(1, n):
         x, y, w, h, a = st[i]
         if x == 0 or y == 0 or x + w >= W or y + h >= H:
             continue
         m = lab[y:y + h, x:x + w] == i
-        if wl[y:y + h, x:x + w][m].mean() >= 0.6:
+        cw = wl[y:y + h, x:x + w][m].mean()
+        co = op[y:y + h, x:x + w][m].mean()
+        # Wandfläche; Flächen, die über den Öffnungsrand hinaus in die Wand reichen (Schraffur bis zur
+        # gezeichneten Leibung), gehören ebenfalls dazu – das Innere der Öffnung (Rahmen, Glas) nicht
+        if cw >= 0.6 or (cw + co >= 0.9 and cw >= 0.3):
             filled[y:y + h, x:x + w][m] = 255
     # Brücken über kleine Lücken der Umrisslinie (nur innerhalb der Wand)
-    filled = cv2.bitwise_or(filled, cv2.bitwise_and(cv2.subtract(ink_c, ink_z), cv2.erode(walls, np.ones((3, 3), np.uint8))))
+    filled = cv2.bitwise_or(filled, cv2.bitwise_and(cv2.subtract(ink_c, ink_z),
+                                                    cv2.erode(cv2.bitwise_or(walls, openings), np.ones((3, 3), np.uint8))))
     # wo die Tinte keine Wandfläche ergibt (Lücken, sehr blasse Linien), die erkannte Wand übernehmen
     grow = int(max(1, round(sw))) * 2 + 1
     lost = cv2.bitwise_and(walls, cv2.bitwise_not(cv2.dilate(filled, np.ones((grow, grow), np.uint8))))
@@ -199,13 +205,25 @@ def wall_material(binary: np.ndarray, walls: np.ndarray, openings: np.ndarray, t
                 sub = filled[ya:yb, xa:xb]
                 sub[wsub] = 255
     # nur zusammenhängende Teile, die substanziell Wand sind
-    # Öffnungen sind keine Wand (Rahmen-/Glaslinien darin gehören zum Fenster); die Leibungslinie selbst
-    # (Strich an der Öffnungskante) bleibt Teil der Wand
+    # In Öffnungen bleibt nur, was zur Wandmasse gehört (Leibung, Schräge, Anschlag); Rahmen- und
+    # Glaslinien sind dünner und fallen weg
     if np.any(openings):
-        cut = cv2.bitwise_and(filled, cv2.bitwise_not(openings))
-        g = int(max(1, round(sw))) + 1
-        back = cv2.bitwise_and(cv2.bitwise_and(ink, openings), cv2.dilate(cut, np.ones((2 * g + 1, 2 * g + 1), np.uint8)))
-        filled = cv2.bitwise_or(cut, back)
+        k2 = int(max(5, round(0.35 * t))) | 1
+        massive = cv2.morphologyEx(filled, cv2.MORPH_OPEN, np.ones((k2, k2), np.uint8))
+        m_in = cv2.bitwise_and(massive, openings)
+        # was quer durch die ganze Öffnung läuft, ist das Fenster selbst (verschwommene Rahmenlinien)
+        n_o, lab_o, st_o, _ = cv2.connectedComponentsWithStats(openings, connectivity=4)
+        n_m, lab_m, st_m, _ = cv2.connectedComponentsWithStats(m_in, connectivity=8)
+        for j in range(1, n_m):
+            x, y, w, h, _a = st_m[j]
+            oi = lab_o[y + h // 2, x + w // 2] if lab_o[y + h // 2, x + w // 2] else lab_o[y, x]
+            if not oi:
+                continue
+            ow, oh = st_o[oi, 2], st_o[oi, 3]
+            along = w if ow >= oh else h
+            if along > 0.5 * max(ow, oh):
+                m_in[lab_m == j] = 0
+        filled = cv2.bitwise_or(cv2.bitwise_and(filled, cv2.bitwise_not(openings)), m_in)
     # einzelne Striche (Fensterbank, Masslinien-Anschlüsse, Möbelkanten) sind keine Wandfläche
     k = int(max(3, round(1.6 * sw))) | 1
     inner = cv2.erode(walls, np.ones((3, 3), np.uint8))
@@ -373,14 +391,14 @@ def wall_rings(material: np.ndarray, sw: float, t: float):
     for i, c in enumerate(contours):
         if hier[i][3] != -1:
             continue
-        outer = _ring_or_fallback(c.reshape(-1, 2) + 0.5, eps, min_edge, drop, 0.5 * t)
+        outer = _ring_or_fallback(c.reshape(-1, 2) + 0.5, eps, min_edge, drop, 0.8 * t)
         if not outer:
             continue
         rings = [outer]
         ch = hier[i][2]
         while ch != -1:
             if cv2.contourArea(contours[ch]) > 0.8 * t * t:
-                r = _ring_or_fallback(contours[ch].reshape(-1, 2) + 0.5, eps, min_edge, drop, 0.5 * t)
+                r = _ring_or_fallback(contours[ch].reshape(-1, 2) + 0.5, eps, min_edge, drop, 0.8 * t)
                 if r:
                     rings.append(r)
             ch = hier[ch][0]

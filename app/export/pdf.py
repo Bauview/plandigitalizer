@@ -131,33 +131,50 @@ def write_pdf(d: Drawing, path: Path, title: str = "Plan") -> None:
     for e in d.entities:
         if isinstance(e, Text) and e.layer == "ROOMS":
             groups.setdefault(e.group, []).append(e)
-    stamp_y: dict[int, float] = {}
+    frames = [e for e in d.entities if isinstance(e, Polyline) and e.layer == "ROOMS"]
+    stamp_pos: dict[int, tuple] = {}
+    fshape = page.new_shape()
+    n_frames = 0
     for g, items in groups.items():
+        cx = sum((q.box[0] + q.box[2]) / 2 for q in items) / len(items)
         cy = sum((q.box[1] + q.box[3]) / 2 for q in items) / len(items)
-        sizes = [7.5 if "m²" in q.text else 9.0 for q in items]
+        sizes = [9.0 if i == 0 else 7.5 for i in range(len(items))]
+        fonts = ["hebo" if i == 0 else "helv" for i in range(len(items))]
         total = sum(sz * 1.35 for sz in sizes)
         y = oy + cy * k - total / 2
-        for q, sz in zip(items, sizes):
+        wmax = 0.0
+        for q, sz, fn in zip(items, sizes, fonts):
             y += sz * 1.35
-            stamp_y[id(q)] = y - 0.35 * sz
+            stamp_pos[id(q)] = (y - 0.35 * sz, sz, fn)
+            try:
+                wmax = max(wmax, fitz.get_text_length(q.text, fontname=fn, fontsize=sz))
+            except Exception:  # noqa: BLE001
+                pass
+        # gezeichneter Stempelrahmen im Original -> Rahmen um den Stempel
+        has_frame = any(min(p[0] for p in f.points) <= cx <= max(p[0] for p in f.points) and
+                        min(p[1] for p in f.points) <= cy <= max(p[1] for p in f.points) for f in frames)
+        if has_frame and wmax > 0:
+            pad = 3.0
+            x_c, y_top = ox + cx * k, oy + cy * k - total / 2
+            n_frames += 1
+            fshape.draw_rect(fitz.Rect(x_c - wmax / 2 - pad, y_top - pad + 1.5, x_c + wmax / 2 + pad,
+                                       y_top + total + pad + 1.0))
+    if n_frames:
+        fshape.finish(color=(0, 0, 0), width=0.25, oc=ocg["ROOMS"])
+        fshape.commit()
     for e in d.entities:
         if not isinstance(e, Text):
             continue
-        is_area = "m²" in e.text
-        if e.layer == "ROOMS":                      # Raumstempel: feste Papiergrösse
-            fs = 7.5 if is_area else 9.0
-        else:
-            fs = min(10.0, max(3.0, e.height * k / 0.72))
-        font = "hebo" if (e.layer == "ROOMS" and not is_area) else "helv"
         try:
-            if e.layer == "ROOMS":
-                cx = (e.box[0] + e.box[2]) / 2
+            if e.layer == "ROOMS":                      # Raumstempel: feste Papiergrösse
+                yb, fs, font = stamp_pos.get(id(e), (oy + (e.box[1] + e.box[3]) / 2 * k, 7.5, "helv"))
+                cx = sum((q.box[0] + q.box[2]) / 2 for q in groups[e.group]) / len(groups[e.group])
                 tw = fitz.get_text_length(e.text, fontname=font, fontsize=fs)
-                yb = stamp_y.get(id(e), oy + (e.box[1] + e.box[3]) / 2 * k + fs * 0.35)
                 page.insert_text(fitz.Point(ox + cx * k - tw / 2, yb), e.text, fontsize=fs,
                                  fontname=font, color=(0, 0, 0), oc=ocg["ROOMS"])
             else:
-                page.insert_text(P(e.insert), e.text, fontsize=fs, fontname=font, color=(0, 0, 0),
+                fs = min(10.0, max(3.0, e.height * k / 0.72))
+                page.insert_text(P(e.insert), e.text, fontsize=fs, fontname="helv", color=(0, 0, 0),
                                  rotate=e.rotation, oc=ocg.get(e.layer, ocg["TEXT"]))
         except Exception:  # noqa: BLE001  (z.B. nicht darstellbare Zeichen)
             continue

@@ -55,8 +55,8 @@ def test_scan_essentials():
     d = run_pipeline(SAMPLES / "scan_300dpi.png")
     assert _rec(d) == (3, 4)
     layers = d.layer_counts()
-    # Nur das Wesentliche: keine Bemassung, keine Restlinien
-    assert "DIMENSIONS" not in layers and "LINES" not in layers and "SYMBOLS" not in layers, layers
+    # Das Wesentliche: Bemassung ja, Restlinien/Möbel nein
+    assert layers.get("DIMENSIONS", 0) >= 4 and "LINES" not in layers and "SYMBOLS" not in layers, layers
     assert layers.get("STAIRS", 0) >= 8
     assert _walls_axis_aligned(d)
     # Türen mit Anschlag (Blatt + Bogen)
@@ -182,7 +182,7 @@ def test_wall_geometry_on_scan():
 
 
 def test_room_stamps_verified(tmp_path):
-    """Raumstempel: korrekte Fläche wird übernommen, falsche verworfen (mit Hinweis)."""
+    """Raumstempel: Flächen werden wie gezeichnet übernommen, unplausible mit Hinweis."""
     from PIL import Image, ImageDraw, ImageFont
     from make_samples import FONT, P  # type: ignore
     img = Image.open(SAMPLES / "scan_300dpi.png").convert("L")
@@ -196,6 +196,7 @@ def test_room_stamps_verified(tmp_path):
     from app.pipeline.geometry import Text
     rooms = [e.text for e in dr.entities if isinstance(e, Text) and e.layer == "ROOMS"]
     assert "20.3 m²" in rooms, rooms
-    assert "35.0 m²" not in rooms, rooms
-    assert any("35.0 m²" in w and "nicht übernommen" in w for w in dr.warnings), dr.warnings
+    assert "35.0 m²" in rooms, rooms
+    assert any("35.0 m²" in w and "prüfen" in w for w in dr.warnings), dr.warnings
+    assert not any("20.3 m²" in w for w in dr.warnings), dr.warnings
     assert "Wohnen" in rooms

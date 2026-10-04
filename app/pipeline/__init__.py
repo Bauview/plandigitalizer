@@ -188,13 +188,13 @@ def stage_finish(st: Stage1, texts: list, ocr_ok: bool, calibration: dict | None
 
     stamps = None
     if sem is not None and texts:
-        stamps = essential.room_stamps(sem, texts, drawing.mm_per_px)
+        stamps = essential.room_stamps(sem, texts, drawing.mm_per_px, prep.binary)
         if not drawing.mm_per_px and stamps[3]:
             drawing.mm_per_px, drawing.unit = stamps[3], "mm"
             drawing.scale_note = ("Massstab aus den Flächenangaben der Raumstempel abgeleitet – bitte in CAD "
                                   "an einem bekannten Mass prüfen.")
             warnings = [x for x in warnings if x != SCALE_UNKNOWN]
-            stamps = essential.room_stamps(sem, texts, drawing.mm_per_px)
+            stamps = essential.room_stamps(sem, texts, drawing.mm_per_px, prep.binary)
     if not drawing.mm_per_px and sem is not None:
         est = essential.fallback_scale_from_doors(sem)
         if est:
@@ -216,6 +216,8 @@ def stage_finish(st: Stage1, texts: list, ocr_ok: bool, calibration: dict | None
         for l in lines:
             if l.layer == "STAIRS" and inside(l.mid):
                 drawing.entities.append(l)
+            elif l.layer == "DIMENSIONS":
+                drawing.entities.append(l)                  # Massketten gehören zum Bestandesplan
             elif not essential_only and l.layer not in ("STAIRS",):
                 if l.layer in ("WALLS", "WINDOWS", "DOORS"):
                     l.layer = "LINES"
@@ -238,15 +240,24 @@ def stage_finish(st: Stage1, texts: list, ocr_ok: bool, calibration: dict | None
             if essential_only and _TITLE.search(t.text) and not inside(t.center):
                 # Plantitel (z.B. "Grundriss EG 1:100") -> Plankopf, ohne alte Massstabsangabe
                 if plan_title is None:
-                    plan_title = _SCALE_TXT.sub("", t.text).strip(" ,-–")
+                    # Wörter derselben Zeile (z.B. "GRUNDRISS ERDGESCHOSS BESTAND") zusammennehmen
+                    row = [q for q in texts if q.rotation == 0 and not inside(q.center) and id(q) not in used
+                           and abs(q.center[1] - t.center[1]) < 0.6 * max(1.0, t.height)
+                           and _ALPHA.search(q.text) and q.conf >= 55]
+                    row.sort(key=lambda q: q.box[0])
+                    plan_title = _SCALE_TXT.sub("", " ".join(q.text for q in row) or t.text).strip(" ,-–")
+                    used |= {id(q) for q in row}
                 continue
             if essential_only and _SCALE_TXT.search(t.text):
+                continue
+            if essential_only and t.layer == "DIMENSIONS":
+                drawing.entities.append(t)                  # Masszahl
                 continue
             if essential_only and not (_WORD.search(t.text) and t.conf >= 55):
                 if not ("m2" in t.text or "m²" in t.text):
                     continue                            # Fragmente (z.B. aus Möbelsymbolen) weglassen
             if essential_only:
-                if t.layer == "DIMENSIONS" or not _ALPHA.search(t.text):
+                if not _ALPHA.search(t.text):
                     if not ("m2" in t.text or "m²" in t.text) or not inside(t.center):
                         continue
             drawing.entities.append(t)

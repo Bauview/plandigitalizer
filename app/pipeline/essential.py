@@ -127,7 +127,7 @@ def reconstruct(labels: np.ndarray, binary: np.ndarray) -> SemanticPlan | None:
         cv2.rectangle(band, (int(o.x0), int(o.y0)), (int(math.ceil(o.x1)) - 1, int(math.ceil(o.y1)) - 1), 255, -1)
     gk = max(3, int(round(0.5 * t)) | 1)
     band = cv2.morphologyEx(band, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (gk, gk)))
-    rects, leftover = decompose(band, max(3 * t, 12))
+    rects, leftover = decompose(band, max(3 * t, 12), t_est=t)
     rects = merge_rects(rects, max(2.0, 0.5 * t))
     rects = [_snap_rect(r, ink, t) for r in rects]
     rects = _extend_along_ink(rects, ink, t, openings)
@@ -733,7 +733,9 @@ def fallback_scale_from_doors(sp: SemanticPlan) -> float | None:
 
 
 def footprint_mask(sp: SemanticPlan) -> np.ndarray:
-    return footprint(sp.band, int(max(3, 4 * sp.wall_px)))
+    if getattr(sp, "_foot", None) is None:
+        sp._foot = footprint(sp.band, int(max(3, 4 * sp.wall_px)))  # type: ignore[attr-defined]
+    return sp._foot  # type: ignore[attr-defined]
 
 
 # =============================================================================== Raumstempel

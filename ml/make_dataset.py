@@ -48,7 +48,8 @@ def main():
     data_ids = {p["id"]: i for i, p in enumerate(load_resplan(pkl))}
     splits = json.load(open(split_json))
     jobs = []
-    for (split, count), base in zip(zip(("train", "val", "test"), n), (0, 5_000_000, 6_000_000)):
+    off = int(os.environ.get("SEED_OFFSET", "0"))
+    for (split, count), base in zip(zip(("train", "val", "test"), n), (off, 5_000_000 + off, 6_000_000 + off)):
         (Path(out) / split).mkdir(parents=True, exist_ok=True)
         ids = [data_ids[i] for i in splits[split] if i in data_ids]
         for k in range(count):

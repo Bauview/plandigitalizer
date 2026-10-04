@@ -10,7 +10,7 @@
 
   const LAYER_NAMES = {
     WALLS: "Wände", DOORS: "Türen", WINDOWS: "Fenster", STAIRS: "Treppen", TEXT: "Texte",
-    DIMENSIONS: "Bemassung", LINES: "Linien", HATCH: "Füllungen", SYMBOLS: "Symbole",
+    DIMENSIONS: "Bemassung", LINES: "Linien", HATCH: "Füllungen", SYMBOLS: "Symbole", ROOMS: "Raumstempel",
   };
   const ICON_WARN = '<svg viewBox="0 0 16 16"><path d="M8 1.8 15 14H1z"/><path d="M8 6.2v3.6M8 11.6v.4"/></svg>';
   const ICON_CHECK = '<svg viewBox="0 0 20 20"><path d="m5 10.5 3.2 3.2L15 6.8"/></svg>';

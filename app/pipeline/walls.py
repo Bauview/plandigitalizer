@@ -15,21 +15,25 @@ def median_thickness(mask: np.ndarray) -> float:
     """Mittlere Wandstärke (px) einer Wandmaske über die Distanztransformation auf dem Skelett."""
     if not np.any(mask):
         return 0.0
+    h, w = mask.shape
+    if max(h, w) > 2000:                     # schneller auf halber Grösse (Ergebnis zurückskaliert)
+        small = cv2.resize(mask, (w // 2, h // 2), interpolation=cv2.INTER_NEAREST)
+        return 2.0 * median_thickness(small) if np.any(small) else 0.0
     dt = cv2.distanceTransform((mask > 0).astype(np.uint8), cv2.DIST_L2, 3)
     sk = thinning(mask) > 0
     v = 2 * dt[sk]
     return float(np.median(v)) if v.size else 0.0
 
 
-def decompose(mask: np.ndarray, min_long: float, keep_rest: bool = True) -> tuple[list[tuple], np.ndarray]:
+def decompose(mask: np.ndarray, min_long: float, keep_rest: bool = True,
+              t_est: float | None = None) -> tuple[list[tuple], np.ndarray]:
     """Zerlegt die Wandmaske in achsparallele Wandrechtecke.
 
     Gibt (rechtecke, rest) zurück; ``rest`` enthält Wandteile, die nicht achsparallel sind
     (schräge oder runde Wände) und als Polygon übernommen werden.
     """
-    dt = cv2.distanceTransform(mask, cv2.DIST_L2, 3)
-    sk = thinning(mask) > 0
-    t_est = float(np.median(2 * dt[sk])) if np.any(sk) else 10.0
+    if t_est is None:
+        t_est = median_thickness(mask) or 10.0
     L = int(max(3 * t_est, min_long))
     Hm = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((1, L), np.uint8))
     Vm = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((L, 1), np.uint8))

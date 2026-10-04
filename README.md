@@ -30,7 +30,11 @@ Die gesamte Verarbeitung läuft **im Browser**. Pläne werden nicht hochgeladen,
 | **Ausrichtung** | Schräglage bis ±45° aus den erkannten Wänden · Perspektive entzerrt (Blatt auf Tisch *oder* schräg fotografiert ohne sichtbaren Blattrand) · Blaupausen/Negative |
 | **Bildkorrektur** | Schatten/Hintergrund, Kontrast, Rauschen, Schwarz-Weiss, Lückenschluss |
 | **Erkennung** | Wände, Fenster, Türen pro Pixel durch ein lokal laufendes neuronales Netz; Möbel, Massketten, Schraffuren, Texte werden als „nicht wesentlich“ erkannt |
-| **Geometrie** | Wände als exakte, achsparallele Umrisse (Kanten auf die gezeichnete Linie eingerastet), Ecken und T-Stösse geschlossen; Öffnungen sauber eingeschnitten; Fenster und Türen als genormte Symbole (Anschlagseite aus dem gezeichneten Bogen) |
+| **Geometrie** | Wände als exakte, achsparallele Umrisse (Kanten auf die gezeichnete Linie eingerastet), Ecken und T-Stösse geschlossen; Öffnungen sauber eingeschnitten |
+| **Fenster** | Rahmen-, Glas- und Leibungslinien so, wie sie im Plan gezeichnet sind (aus dem Bild gelesen); gezeichnete Fensterbank aussen; sonst Standardsymbol |
+| **Türen** | Türblatt + Anschlagbogen, Drehpunkt und Aufschlagseite aus dem gezeichneten Bogen; Doppeltüren; ohne erkennbaren Bogen nur die Öffnung |
+| **Raumstempel** | Raumname + Fläche aus der Texterkennung; die Fläche wird nur übernommen, wenn sie zur gemessenen Raumfläche passt (±8 %) |
+| **Planausgabe** | PDF als Bestandesplan: massstäblich auf A3 (1:50 / 1:100 / 1:200 …) mit Massstabsleiste, Wände grau angelegt, Plankopf |
 | **Optional** | „Auch Möblierung, Bemassung und übrige Linien übernehmen“ – dann zusätzlich alle restlichen Linien, Bögen, Kreise, Bemassung |
 | **Texterkennung** | Deutsch + Englisch, auch senkrechte Masszahlen → editierbarer CAD-Text |
 | **Massstab** | Kalibrierung (zwei Punkte + bekannte Länge) · automatisch aus Massketten · „M 1:100" + Papiergrösse |
@@ -61,7 +65,8 @@ Bestandespläne enthalten viel, das für die Weiterbearbeitung stört: Möblieru
 2. **Ausrichtung:** Aus den Kanten der erkannten Wände (nicht aus Möbeln oder Text) werden Schräglage (bis ±45°) und – bei schräg fotografierten Plänen – die Fluchtpunkte bestimmt. Der Plan wird entzerrt, gerade gedreht und neu erkannt.
 3. **Rekonstruktion:** Die Wandfläche wird in achsparallele Wandabschnitte zerlegt; jede Wandkante wird auf die tatsächlich gezeichnete Linie eingerastet. Öffnungen werden auf die Wandstärke ausgerichtet und sauber ausgeschnitten.
 4. **Symbole:** Fenster erhalten Leibungs- und Glaslinien, Türen Blatt und Anschlagbogen. Drehpunkt und Aufschlagseite werden aus dem im Plan gezeichneten Bogen gelesen; Doppeltüren werden erkannt.
-5. **Massstab:** aus Kalibrierung, Massketten oder „M 1:100“ + Papiergrösse. Fehlt alles, wird er aus den Türbreiten **geschätzt** (deutlich als Schätzung markiert).
+5. **Raumstempel:** Texte innerhalb eines Raums werden zu einem Stempel zusammengefasst (Name, Fläche). Die Fläche wird gegen die gemessene Raumfläche geprüft – falsche oder falsch gelesene Flächen werden nicht übernommen und als Hinweis gemeldet.
+6. **Massstab:** aus Kalibrierung, Massketten oder „M 1:100“ + Papiergrösse; sonst aus den Flächenangaben der Raumstempel (wenn mehrere übereinstimmen). Fehlt alles, wird er aus den Türbreiten **geschätzt** (deutlich als Schätzung markiert).
 
 **Training.** Das Netz wurde mit 7'000 Plänen trainiert, die aus den Geometrien von 17'000 echten Wohnungsgrundrissen (Datensatz *ResPlan*, CC BY 4.0) erzeugt wurden – jeweils in zufälligem Zeichenstil nach Schweizer Gepflogenheiten: Wände schwarz, grau angelegt, als Umriss, mit Mauerwerk- oder Kreuzschraffur, als Handskizze; Türen mit vollem oder gestricheltem Bogen, Doppel- und Schiebetüren; Fenster mit Rahmen, Glas und Fensterbank; dazu Möblierung, Massketten mit Hochzahlen, Raumbeschriftungen, Treppen, Bodenbeläge, Achsraster, Plankopf sowie Alterung (Vergilbung, Bleistift, Flecken, Unschärfe, JPEG, Verzug, Perspektive). Geprüft wird mit Plänen, die das Netz nie gesehen hat, und mit echten Zeichnungen (ROBIN-Datensatz, CAD und Handskizzen).
 
@@ -134,6 +139,8 @@ Jedes Bauteil trägt den Eigenschaftssatz **`PlanDigitalizer_Herkunft`** („aus
 - Trainiert wurde mit Wohnungsgrundrissen. Sehr ungewöhnliche Darstellungen (z.B. Industriebau, Schnitte, Ansichten) werden schlechter erkannt.
 - Schräge und runde Wände bleiben als Umriss erhalten, gehen aber nicht ins IFC.
 - **Handschrift** wird kaum gelesen; Raumnamen in Handschrift fehlen.
+- Raumstempel brauchen lesbare Schrift: mindestens ca. 20 px Schrifthöhe im Bild (Scan 300 dpi oder scharfes Foto). Bei Bildschirmfotos oder stark verkleinerten Plänen fehlen sie.
+- Rechenzeit im Browser: ca. 1–1.5 Minuten pro Plan (das Erkennungsnetz läuft ohne Grafikkarte).
 - Ein um 90° gedrehter Plan (Hochformat ↔ Querformat) bleibt so, wie er fotografiert wurde.
 - Schräg fotografierte Pläne werden entzerrt; das Seitenverhältnis kann dabei um einige Prozent abweichen (geometrisch nicht eindeutig bestimmbar). Für massgenaues Arbeiten einen Scan oder ein möglichst frontales Foto verwenden.
 - IFC/3D: Treppen vereinfacht; kein Dach.

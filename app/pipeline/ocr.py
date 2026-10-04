@@ -53,8 +53,12 @@ def _languages() -> str:
 def ocr_images(gray: np.ndarray) -> tuple[list[np.ndarray], float]:
     """Bilder für die Texterkennung: [waagrecht, um 90° gedreht] und Skalierungsfaktor."""
     h, w = gray.shape
-    k = min(1.0, OCR_MAX_SIDE / max(h, w))
-    img = cv2.resize(gray, None, fx=k, fy=k, interpolation=cv2.INTER_AREA) if k < 1 else gray
+    # kleine Pläne vergrössern (Raumstempel sind dort oft nur 10–15 px hoch), grosse verkleinern
+    k = min(2.0, OCR_MAX_SIDE / max(h, w))
+    if abs(k - 1.0) < 0.05:
+        img, k = gray, 1.0
+    else:
+        img = cv2.resize(gray, None, fx=k, fy=k, interpolation=cv2.INTER_AREA if k < 1 else cv2.INTER_CUBIC)
     return [img, cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)], k
 
 

@@ -189,7 +189,7 @@ def _valid(g):
         return g
 
 
-def render(plan: dict, seed: int, max_side: int = 1600) -> dict | None:
+def render(plan: dict, seed: int, max_side: int = 1600, upright: bool = False, style: str | None = None) -> dict | None:
     rng = random.Random(seed)
     nrng = np.random.default_rng(seed)
     walls = _valid(plan["wall"])
@@ -223,6 +223,8 @@ def render(plan: dict, seed: int, max_side: int = 1600) -> dict | None:
         theta = rng.uniform(-4, 4)
     theta += rng.choice([0, 90, 180, 270])
     mirror = rng.random() < 0.5
+    if upright:                      # Testpläne: lesbare Schrift, keine Drehung
+        theta, mirror = 0.0, False
     s = mu * ppm
     c, sn = math.cos(math.radians(theta)), math.sin(math.radians(theta))
     M = s * np.array([[c, -sn], [sn, c]]) @ np.diag([-1.0 if mirror else 1.0, 1.0])
@@ -275,6 +277,16 @@ def render(plan: dict, seed: int, max_side: int = 1600) -> dict | None:
         outside = _outside(cv2.morphologyEx(band.astype(np.uint8), cv2.MORPH_CLOSE,
                                             cv2.getStructuringElement(cv2.MORPH_RECT, (k, k))))
 
+    # Innenwände dünner (Schweizer Praxis: 10–15 cm Trennwände neben 30–45 cm Aussenwänden)
+    if rng.random() < 0.5:
+        ext_zone = cv2.dilate(outside.astype(np.uint8), np.ones((int(max(3, wall_px * 1.6 + ext_px * 2)) | 1,) * 2, np.uint8)) > 0
+        band = lab > 0
+        inner = band & ~ext_zone
+        r = max(1, int(round(wall_px * rng.uniform(0.18, 0.3))))
+        thin = cv2.erode(inner.astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1,) * 2)) > 0
+        keep = (band & ext_zone) | thin
+        lab = np.where(keep, lab, 0).astype(np.uint8)
+        wall_px_inner = max(2.0, wall_px - 2 * r)
     cv_ = Canvas(H, W, fr, rng)
     lw_main = max(1, int(round(rng.uniform(0.8, 2.6) * max(1.0, wall_px / 9))))
     lw_thin = max(1, int(round(lw_main * rng.uniform(0.4, 0.8))))

@@ -106,6 +106,20 @@ def reconstruct(labels: np.ndarray, binary: np.ndarray) -> SemanticPlan | None:
             _bridge(wall, o, t)
         openings = [o for o in openings if o not in small]
 
+    # Türen prüfen: Anschlag aus dem gezeichneten Bogen suchen. Ohne Anschlag und mit durchlaufenden
+    # Wandlinien (oder voller Wandfüllung) ist es keine Öffnung, sondern Wand.
+    tol_ink = _symbol_ink(ink, wall, t)
+    fake = []
+    for o in openings:
+        if o.kind != "door":
+            continue
+        o.swing = _door_swing(o, tol_ink)
+        if not o.swing and _faces_continuous(o, ink, t):
+            fake.append(o)
+    for o in fake:
+        cv2.rectangle(wall, (int(o.x0), int(o.y0)), (int(math.ceil(o.x1)) - 1, int(math.ceil(o.y1)) - 1), 255, -1)
+    openings = [o for o in openings if o not in fake]
+
     # ------------------------------------------------------------ 3) Wandrechtecke
     band = wall.copy()
     for o in openings:
@@ -115,6 +129,7 @@ def reconstruct(labels: np.ndarray, binary: np.ndarray) -> SemanticPlan | None:
     rects, leftover = decompose(band, max(3 * t, 12))
     rects = merge_rects(rects, max(2.0, 0.5 * t))
     rects = [_snap_rect(r, ink, t) for r in rects]
+    rects = _extend_along_ink(rects, ink, t, openings)
     rects = _square_junctions(rects, t)
     rects = [r for r in rects if max(r[2] - r[0], r[3] - r[1]) >= 1.2 * min(r[2] - r[0], r[3] - r[1]) or
              (r[2] - r[0]) * (r[3] - r[1]) >= 1.5 * t * t]
@@ -128,10 +143,15 @@ def reconstruct(labels: np.ndarray, binary: np.ndarray) -> SemanticPlan | None:
             else:
                 o.x0, o.x1 = host[0], host[2]
         _snap_jambs(o, ink, t)
-
     band_clean = raster_rects((H, W), rects)
     band_clean = cv2.bitwise_or(band_clean, leftover)
     _interior_windows_to_doors(openings, band_clean, t)
+    # zweite Prüfung mit ausgerichteten Öffnungen: Tür ohne Anschlag, Wandkanten laufen durch -> Wand
+    for o in openings:
+        if o.kind == "door" and not o.swing:
+            o.swing = _door_swing(o, tol_ink)
+    openings = [o for o in openings
+                if not (o.kind == "door" and not o.swing and _faces_continuous(o, ink, t))]
     walls = band_clean.copy()
     for o in openings:
         ex = 2
@@ -172,7 +192,7 @@ def _opening_rect(kind, x, y, w, h, wall, t) -> Opening | None:
     else:
         a0, a1, c0, c1 = float(y), float(y + h), float(x), float(x + w)
         cc = _cross_extent(wall, a0, a1, c0, c1, r, t, horiz=False)
-    if cc:
+    if cc and (cc[1] - cc[0]) <= 1.8 * max(c1 - c0, 0.6 * t):
         c0, c1 = cc
     # bis zur Wand verlängern (Netz lässt an den Jamben oft 1–2 px frei)
     cm = (c0 + c1) / 2
@@ -232,22 +252,20 @@ def _extend(wall, a, cm, sign, r, orient):
 def _bridge(wall: np.ndarray, o: Opening, t: float) -> None:
     """Füllt eine (Schein-)Öffnung mit dem Querschnitt der angrenzenden Wand."""
     H, W = wall.shape
-    m = int(max(2, t))
+    m = 1
     x0, y0, x1, y1 = int(o.x0), int(o.y0), int(math.ceil(o.x1)), int(math.ceil(o.y1))
     if o.orient == "v":                 # Wand läuft senkrecht: Spalten der Wand oben/unten übernehmen
         cols = np.arange(max(0, x0 - m), min(W, x1 + m))
         above = wall[max(0, y0 - 3):max(0, y0 - 1), cols].any(axis=0) if y0 > 2 else np.zeros(len(cols), bool)
         below = wall[min(H, y1 + 1):min(H, y1 + 3), cols].any(axis=0) if y1 < H - 2 else np.zeros(len(cols), bool)
         sel = _narrow(cols, above, below)
-        if sel.size:
-            wall[y0:y1, sel] = 255
+        wall[y0:y1, sel if sel.size else cols] = 255
     else:
         rows = np.arange(max(0, y0 - m), min(H, y1 + m))
         left = wall[rows, max(0, x0 - 3):max(0, x0 - 1)].any(axis=1) if x0 > 2 else np.zeros(len(rows), bool)
         right = wall[rows, min(W, x1 + 1):min(W, x1 + 3)].any(axis=1) if x1 < W - 2 else np.zeros(len(rows), bool)
         sel = _narrow(rows, left, right)
-        if sel.size:
-            wall[sel, x0:x1] = 255
+        wall[sel if sel.size else rows, x0:x1] = 255
 
 
 def _narrow(idx, a, b):
@@ -260,6 +278,103 @@ def _narrow(idx, a, b):
     if not cand:
         return idx[:0]
     return idx[min(cand, key=lambda m: int(m.sum()))]
+
+
+def _symbol_ink(ink: np.ndarray, wall: np.ndarray, t: float) -> np.ndarray:
+    """Tinte ausserhalb der Wände, leicht verbreitert (für die Suche nach Türbögen)."""
+    out = cv2.bitwise_and(ink, cv2.bitwise_not(cv2.dilate(wall, np.ones((3, 3), np.uint8))) // 255)
+    rad = max(1, int(round(0.12 * t)))
+    return cv2.dilate(out, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * rad + 1,) * 2))
+
+
+def _faces_continuous(o: "Opening", ink: np.ndarray, t: float) -> bool:
+    """Laufen beide Wandkanten (oder eine volle Füllung) durch die angebliche Öffnung?"""
+    H, W = ink.shape
+    d = max(2, int(round(0.18 * t)))
+    if o.orient == "h":
+        a0, a1 = int(o.x0 + 0.1 * (o.x1 - o.x0)), int(o.x1 - 0.1 * (o.x1 - o.x0))
+        f0, f1 = int(o.y0), int(math.ceil(o.y1))
+        if a1 <= a0 or f1 - f0 < 2:
+            return False
+        top = ink[max(0, f0 - 1):min(H, f0 + d), a0:a1].any(axis=0).mean()
+        bot = ink[max(0, f1 - d):min(H, f1 + 1), a0:a1].any(axis=0).mean()
+        fill = ink[f0:f1, a0:a1].mean()
+    else:
+        a0, a1 = int(o.y0 + 0.1 * (o.y1 - o.y0)), int(o.y1 - 0.1 * (o.y1 - o.y0))
+        f0, f1 = int(o.x0), int(math.ceil(o.x1))
+        if a1 <= a0 or f1 - f0 < 2:
+            return False
+        top = ink[a0:a1, max(0, f0 - 1):min(W, f0 + d)].any(axis=1).mean()
+        bot = ink[a0:a1, max(0, f1 - d):min(W, f1 + 1)].any(axis=1).mean()
+        fill = ink[a0:a1, f0:f1].mean()
+    return (top >= 0.85 and bot >= 0.85) or fill >= 0.7
+
+
+def _extend_along_ink(rects, ink, t, openings, max_mul=8.0):
+    """Wandenden verlängern, solange die gezeichnete Wand (beide Kanten oder Füllung) weiterläuft."""
+    H, W = ink.shape
+    d = max(2, int(round(0.18 * t)))
+    occ = raster_rects((H, W), rects)
+    for o in openings:
+        cv2.rectangle(occ, (int(o.x0), int(o.y0)), (int(math.ceil(o.x1)) - 1, int(math.ceil(o.y1)) - 1), 255, -1)
+    out = []
+    for r in rects:
+        x0, y0, x1, y1, ori = r
+        r = list(r)
+        for end, sign in ((0, -1), (1, +1)):
+            if ori == "h":
+                f0, f1 = int(round(y0)), int(round(y1))
+                pos = int(round(x1)) if sign > 0 else int(round(x0)) - 1
+            else:
+                f0, f1 = int(round(x0)), int(round(x1))
+                pos = int(round(y1)) if sign > 0 else int(round(y0)) - 1
+            if f1 - f0 < 2:
+                continue
+            steps, miss, hit = 0, 0, False
+            limit = int(max_mul * t)
+            p = pos
+            while steps < limit:
+                if ori == "h":
+                    if not (0 <= p < W):
+                        break
+                    col_occ = occ[f0 + 1:f1 - 1, p].mean() > 0.5 * 255
+                    a = ink[max(0, f0 - 1):f0 + d, p].any()
+                    b = ink[f1 - d:min(H, f1 + 1), p].any()
+                    fl = ink[f0:f1, p].mean()
+                else:
+                    if not (0 <= p < H):
+                        break
+                    col_occ = occ[p, f0 + 1:f1 - 1].mean() > 0.5 * 255
+                    a = ink[p, max(0, f0 - 1):f0 + d].any()
+                    b = ink[p, f1 - d:min(W, f1 + 1)].any()
+                    fl = ink[p, f0:f1].mean()
+                if col_occ:
+                    hit = True
+                    break
+                if (a and b) or fl >= 0.7:
+                    miss = 0
+                else:
+                    miss += 1
+                    if miss > 2:
+                        break
+                p += sign
+                steps += 1
+            ext = steps - miss
+            if hit or ext >= 0.5 * t:
+                if hit:
+                    ext = steps
+                if ori == "h":
+                    if sign > 0:
+                        r[2] = x1 + ext
+                    else:
+                        r[0] = x0 - ext
+                else:
+                    if sign > 0:
+                        r[3] = y1 + ext
+                    else:
+                        r[1] = y0 - ext
+        out.append(tuple(r))
+    return out
 
 
 def _dedupe(ops: list[Opening]) -> list[Opening]:
@@ -461,7 +576,8 @@ def opening_entities(sp: SemanticPlan, binary: np.ndarray) -> list:
         if o.kind == "window":
             ents.extend(_window_lines(o))
         else:
-            o.swing = _door_swing(o, tol_ink)
+            if not o.swing:
+                o.swing = _door_swing(o, tol_ink)
             for hx, hy, ldx, ldy, r, jdx, jdy in o.swing:
                 tip = (hx + ldx * r, hy + ldy * r)
                 ents.append(Line((hx, hy), tip, "DOORS"))
@@ -523,7 +639,7 @@ def _door_swing(o: Opening, ink) -> list:
             arc = np.mean([val((h[0] + rr * (math.cos(p) * d[0] + math.sin(p) * j[0]),
                                 h[1] + rr * (math.cos(p) * d[1] + math.sin(p) * j[1]))) for p in phis])
             leaf = np.mean([val((h[0] + d[0] * rr * s_, h[1] + d[1] * rr * s_)) for s_ in np.linspace(0.2, 0.9, 12)])
-            sc = 0.7 * arc + 0.3 * leaf
+            sc = 0.7 * arc + 0.3 * leaf if arc >= 0.5 else 0.0   # der Bogen muss klar gezeichnet sein
             if sc > best[0]:
                 best = (sc, (h[0], h[1], d[0], d[1], rr, j[0], j[1]))
         return best

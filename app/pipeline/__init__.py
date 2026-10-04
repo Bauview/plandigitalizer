@@ -213,11 +213,15 @@ def stage_finish(st: Stage1, texts: list, ocr_ok: bool, calibration: dict | None
             warnings.append("Keine Türen oder Fenster erkannt.")
         foot = essential.footprint_mask(sem)
         inside = lambda p: 0 <= int(p[1]) < h and 0 <= int(p[0]) < w and foot[int(p[1]), int(p[0])] > 0  # noqa: E731
+        # Masslinien im Gebäudeinneren sind meist Fehlzuordnungen (Flächenzahlen, Möbel) -> nur aussen
+        e_ = int(max(3, sem.wall_px))
+        foot_in = cv2.erode(foot, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * e_ + 1,) * 2))
+        inside_deep = lambda p: 0 <= int(p[1]) < h and 0 <= int(p[0]) < w and foot_in[int(p[1]), int(p[0])] > 0  # noqa: E731
         for l in lines:
             if l.layer == "STAIRS" and inside(l.mid):
                 drawing.entities.append(l)
-            elif l.layer == "DIMENSIONS":
-                drawing.entities.append(l)                  # Massketten gehören zum Bestandesplan
+            elif l.layer == "DIMENSIONS" and not (inside_deep(l.p1) and inside_deep(l.p2)):
+                drawing.entities.append(l)                  # Massketten (aussen) gehören zum Bestandesplan
             elif not essential_only and l.layer not in ("STAIRS",):
                 if l.layer in ("WALLS", "WINDOWS", "DOORS"):
                     l.layer = "LINES"
@@ -251,7 +255,8 @@ def stage_finish(st: Stage1, texts: list, ocr_ok: bool, calibration: dict | None
             if essential_only and _SCALE_TXT.search(t.text):
                 continue
             if essential_only and t.layer == "DIMENSIONS":
-                drawing.entities.append(t)                  # Masszahl
+                if not inside_deep(t.center):
+                    drawing.entities.append(t)              # Masszahl
                 continue
             if essential_only and not (_WORD.search(t.text) and t.conf >= 55):
                 if not ("m2" in t.text or "m²" in t.text):

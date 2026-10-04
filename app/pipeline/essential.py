@@ -1150,6 +1150,20 @@ def room_stamps(sp: SemanticPlan, texts: list, mm_per_px: float | None, binary: 
                 if mmpp and rm.area_px > 0:
                     meas = rm.area_px * mmpp * mmpp / 1e6
                     if abs(val - meas) > 0.08 * meas:
+                        # typischer Lesefehler: eine Ziffer zu viel/falsch ("235.5" statt "25.5")
+                        raw = f"{val:.2f}".rstrip("0").rstrip(".") if "." in f"{val}" else f"{val}"
+                        alts = []
+                        for k_ in range(len(raw)):
+                            if raw[k_].isdigit():
+                                try:
+                                    alts.append(float(raw[:k_] + raw[k_ + 1:]))
+                                except ValueError:
+                                    pass
+                        good = sorted((abs(a_ - meas), a_) for a_ in alts if a_ > 0 and abs(a_ - meas) <= 0.05 * meas)
+                        if good:
+                            val = good[0][1]
+                            txt = f"{val:.1f} m²" if abs(val * 10 - round(val * 10)) < 1e-6 else f"{val:.2f} m²"
+                    if abs(val - meas) > 0.08 * meas:
                         name = " ".join(str(v) for _, k_, v in block if k_ != "area") or "?"
                         notes.append(f"Raumstempel «{name}»: Fläche {val:.1f} m² weicht von der gemessenen Fläche "
                                      f"{meas:.1f} m² ab – bitte prüfen.")

@@ -30,6 +30,7 @@ Die gesamte Verarbeitung läuft **im Browser**. Pläne werden nicht hochgeladen,
 | **Ausrichtung** | Schräglage bis ±45° aus den erkannten Wänden · Perspektive entzerrt (Blatt auf Tisch *oder* schräg fotografiert ohne sichtbaren Blattrand) · Blaupausen/Negative |
 | **Bildkorrektur** | Schatten/Hintergrund, Kontrast, Rauschen, Schwarz-Weiss, Lückenschluss |
 | **Erkennung** | Wände, Fenster, Türen pro Pixel durch ein lokal laufendes neuronales Netz; dünne Leichtbauwände zusätzlich aus gezeichneten Doppellinien; Möbel, Schraffuren, Fremdtexte werden verworfen |
+| **Gefüllte Wände** | CAD-Pläne mit schwarz gefüllten Wänden: Wände direkt aus der Wandfüllung, Fenster und Türen aus den Unterbrüchen (Fensterlinien → Fenster, Türbogen → Tür, Lichtschacht-/Kippfenster in der Fassade), Lichtschächte und Bänke aussen werden übernommen |
 | **Geometrie** | Wände **1:1 aus der Zeichnung nachgezogen** (Strichmitte): schräge Fensterleibungen, Anschläge, Nischen, Vorsprünge, schräge Wände; Kanten auf 0/45/90° eingerastet, freie Winkel bleiben; Abweichung auf Testplänen im Mittel 4–6 mm |
 | **Fenster** | Rahmen-, Glas- und Bankkanten mit ihrer gezeichneten Lage und Länge aus dem Bild übernommen (Möbel innen werden nicht mitgenommen); nur wenn nichts lesbar ist, Standardsymbol |
 | **Türen** | Türblatt + Anschlagbogen: Drehpunkt und Radius per Kreisausgleich aus dem gezeichneten Bogen, Blattlage aus der Zeichnung; Doppeltüren; ohne erkennbaren Bogen nur die Öffnung |
@@ -165,6 +166,7 @@ plandigitalizer/
 │  │  ├─ semantic.py    Netz (Wand/Fenster/Tür), Ausrichtung, Perspektive
 │  │  ├─ essential.py   Wände, Öffnungen, Tür-/Fenstersymbole, Raumstempel
 │  │  ├─ trace.py       1:1-Nachzeichnen der Wände aus der Tinte, Leichtbauwände aus Doppellinien
+│  │  ├─ poche.py       Pläne mit gefüllten Wänden: Wandfläche und Öffnungen aus der Füllung
 │  │  └─ walls.py       Wandzerlegung (gemeinsam mit bim/)
 │  ├─ models/           plannet.onnx (Erkennungsmodell)
 │  ├─ bim/              derive.py (Gebäudemodell), ifc_writer.py

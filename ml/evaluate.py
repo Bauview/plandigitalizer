@@ -88,7 +88,7 @@ def main():
             # Restschräglage der Wahrheit nach der automatischen Ausrichtung
             ang, _ = semantic.dominant_angle(((lab > 0) * 255).astype(np.uint8))
             angle_errs.append(abs(ang))
-        sp = essential.reconstruct(st.seg.labels, st.prep.binary)
+        sp = essential.reconstruct(st.seg.labels, st.prep.binary, st.prep.gray)
         gt = gt_openings(lab)
         t = max(1.0, m.get("wall_px", 8.0) * float(np.sqrt(abs(np.linalg.det(st.prep.M[:2, :2])))))
         if sp is None:

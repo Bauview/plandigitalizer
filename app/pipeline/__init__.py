@@ -139,7 +139,7 @@ def stage_finish(st: Stage1, texts: list, ocr_ok: bool, calibration: dict | None
         _tk = time.time()
     sem = None
     if st.seg is not None:
-        sem = essential.reconstruct(st.seg.labels, prep.binary)
+        sem = essential.reconstruct(st.seg.labels, prep.binary, prep.gray)
     _tick("reconstruct")
     if sem is not None:
         # Wände/Öffnungen stammen aus der Erkennung; der Rest des Plans wird separat vektorisiert

@@ -53,13 +53,22 @@ class SemanticPlan:
 
 
 # =============================================================================== Hauptfunktion
-def reconstruct(labels: np.ndarray, binary: np.ndarray) -> SemanticPlan | None:
+def reconstruct(labels: np.ndarray, binary: np.ndarray, gray: np.ndarray | None = None) -> SemanticPlan | None:
     H, W = labels.shape
     wall = ((labels == WALL) * 255).astype(np.uint8)
     t = median_thickness(wall)
     if t <= 0 or np.count_nonzero(wall) < 50:
         return None
     t = max(2.0, t)
+    # Wände schwarz gefüllt (CAD-Standard): Geometrie und Öffnungen direkt aus der Wandfüllung
+    po = None
+    if gray is not None:
+        from .poche import poche_labels
+        pl = poche_labels(gray, binary, labels, t)
+        if pl is not None:
+            labels, po = pl
+            wall = ((labels == WALL) * 255).astype(np.uint8)
+            t = max(2.0, median_thickness(wall) or t)
     ink = (binary > 0).astype(np.uint8)
     # dünne, nur als Doppellinie gezeichnete Wände (Leichtbau) ergänzen, die das Netz übersehen hat
     thin = trace.double_line_walls(binary, labels, t)
@@ -192,7 +201,11 @@ def reconstruct(labels: np.ndarray, binary: np.ndarray) -> SemanticPlan | None:
         if x1 > x0 and y1 > y0:
             cv2.rectangle(omask, (int(round(x0)), int(round(y0))), (int(round(x1)) - 1, int(round(y1)) - 1), 255, -1)
     material = trace.wall_material(binary, walls, omask, t, sw, rects)
-    regions = trace.wall_rings(material, sw, t)
+    if po is not None:
+        # gefüllte Wände: die (bereinigte) Wandfläche selbst ist die Geometrie – kein Nachzeichnen von
+        # angehängten Linien (Lichtschächte, Fensterrahmen, Möbel) und kein Scanrauschen
+        material = walls.copy()
+    regions = trace.wall_rings(material, sw, t, solid=po)
     if regions:
         traced = np.zeros((H, W), np.uint8)
         for rings in regions:
@@ -963,7 +976,7 @@ def footprint_mask(sp: SemanticPlan) -> np.ndarray:
 
 
 # =============================================================================== Raumstempel
-_AREA_RE = re.compile(r"(?:F\s*[=:]\s*)?(\d{1,3}(?:[.,]\d{1,2})?)\s*(?:m\s*[2²]|qm)", re.I)
+_AREA_RE = re.compile(r"(?:(?:\bF|\bBF|\bNF|\bHNF|\bNGF|\bGF)\s*[=:]?\s*(\d{1,3}(?:[.,]\d{1,2})?)(?![\d.,]))|(?:(\d{1,3}(?:[.,]\d{1,2})?)\s*(?:m\s*[2²]|qm))", re.I)
 _LETTERS = re.compile(r"[A-Za-zÄÖÜäöüéèàç]{2,}")
 
 
@@ -1086,7 +1099,7 @@ def room_stamps(sp: SemanticPlan, texts: list, mm_per_px: float | None, binary: 
     def area_of(q):
         m_ = _AREA_RE.search(q.text.replace(" ", "")) or _AREA_RE.search(q.text)
         if m_:
-            return float(m_.group(1).replace(",", "."))
+            return float((m_.group(1) or m_.group(2)).replace(",", "."))
         m_ = _BARE_AREA.match(q.text.strip())
         return float(m_.group(1).replace(",", ".")) if m_ else None
 

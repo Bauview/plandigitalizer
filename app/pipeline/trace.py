@@ -474,13 +474,16 @@ def _area(r):
     return a / 2
 
 
-def wall_rings(material: np.ndarray, sw: float, t: float):
+def wall_rings(material: np.ndarray, sw: float, t: float, solid: np.ndarray | None = None):
     """Polygone (Aussenring + Löcher) der Wandflächen; Kanten in Strichmitte (halbe Strichstärke innen)."""
     k = int(round(sw / 2))
     m = material
     if k >= 1:
         ker = np.ones((2 * k + 1, 2 * k + 1), np.uint8)
         m = cv2.erode(material, ker)
+        if solid is not None:
+            # gefüllte Wände (Poché): die Füllkante ist die Wandkante – nicht um eine Strichbreite einrücken
+            m = cv2.bitwise_or(m, cv2.bitwise_and(material, solid))
         # dünne Wände, die nur aus einem kräftigen Strich bestehen, behalten ihre volle Breite
         thin = cv2.subtract(material, cv2.dilate(m, ker))
         thin = cv2.morphologyEx(thin, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))

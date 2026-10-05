@@ -229,8 +229,14 @@ def stage_finish(st: Stage1, texts: list, ocr_ok: bool, calibration: dict | None
         e_ = int(max(3, sem.wall_px))
         foot_in = cv2.erode(foot, np.ones((2 * e_ + 1, 2 * e_ + 1), np.uint8))
         inside_deep = lambda p: 0 <= int(p[1]) < h and 0 <= int(p[0]) < w and foot_in[int(p[1]), int(p[0])] > 0  # noqa: E731
+        wells = essential.window_well_zones(sem)
         for l in lines:
             if l.layer == "STAIRS" and inside(l.mid):
+                drawing.entities.append(l)
+            elif l.layer not in ("DIMENSIONS", "TEXT") and not inside(l.mid) and \
+                    any(z[0] <= min(l.p1[0], l.p2[0]) and max(l.p1[0], l.p2[0]) <= z[2] and
+                        z[1] <= min(l.p1[1], l.p2[1]) and max(l.p1[1], l.p2[1]) <= z[3] for z in wells):
+                l.layer = "WINDOWS"                      # Lichtschacht / Fensterbank aussen vor dem Fenster
                 drawing.entities.append(l)
             elif l.layer == "DIMENSIONS" and not (inside_deep(l.p1) and inside_deep(l.p2)):
                 drawing.entities.append(l)                  # Massketten (aussen) gehören zum Bestandesplan

@@ -956,6 +956,34 @@ def _door_swing(o: Opening, ink) -> list:
     return swing if sc >= 0.42 else []
 
 
+def window_well_zones(sp: SemanticPlan) -> list:
+    """Bereiche aussen vor Fenstern (Lichtschacht, Bank): (x0, y0, x1, y1) je Fenster."""
+    foot = footprint_mask(sp)
+    H, W = foot.shape
+    out = []
+    for o in sp.openings:
+        if o.kind != "window":
+            continue
+        T = max(2.0, (o.y1 - o.y0) if o.orient == "h" else (o.x1 - o.x0))
+        cx, cy = (o.x0 + o.x1) / 2, (o.y0 + o.y1) / 2
+        d = T / 2 + 0.5 * T
+        if o.orient == "h":
+            above = not (0 <= int(cy - d) < H) or foot[int(cy - d), int(cx)] == 0
+            ext_a0, ext_a1 = o.x0 - 1.2 * T, o.x1 + 1.2 * T
+            if above:
+                out.append((ext_a0, o.y0 - 6 * T, ext_a1, o.y0 + 2))
+            else:
+                out.append((ext_a0, o.y1 - 2, ext_a1, o.y1 + 6 * T))
+        else:
+            left = not (0 <= int(cx - d) < W) or foot[int(cy), int(cx - d)] == 0
+            ext_a0, ext_a1 = o.y0 - 1.2 * T, o.y1 + 1.2 * T
+            if left:
+                out.append((o.x0 - 6 * T, ext_a0, o.x0 + 2, ext_a1))
+            else:
+                out.append((o.x1 - 2, ext_a0, o.x1 + 6 * T, ext_a1))
+    return out
+
+
 def fallback_scale_from_doors(sp: SemanticPlan) -> float | None:
     """Grobe Massstabs-Schätzung (mm/px) aus Türbreiten (Annahme: Rohbaulichte ~0.90 m)."""
     ws = [o.width for o in sp.openings if o.kind == "door" and len(o.swing) == 1]
